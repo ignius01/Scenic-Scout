@@ -1,0 +1,6 @@
+{
+  "name": "Scenic Scout",
+  "description": "High-speed outdoor scouting and landscape mapping tool with celestial tracking, offline weather sync, and real-time mapping for Pixel Fold and other mobile devices.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

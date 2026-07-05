@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "599327496836",
+    "project_id": "scenic-scout",
+    "storage_bucket": "scenic-scout.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:599327496836:android:318ee862295ad29e1780d1",
+        "android_client_info": {
+          "package_name": "com.aistudio.scenicscout.plvaxq"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "599327496836-9c9o14p32utdag2hismh6brgek6f2bup.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxQ7qJ_Bm23K38cgv5OQatNdXkQltd6Uw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "599327496836-9c9o14p32utdag2hismh6brgek6f2bup.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
