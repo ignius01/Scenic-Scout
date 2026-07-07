@@ -18,12 +18,14 @@ interface WeatherApi {
 data class WeatherResponse(
     val main: MainData,
     val weather: List<WeatherData>,
-    val clouds: CloudsData
+    val clouds: CloudsData,
+    val wind: WindData? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class MainData(
-    val temp: Double
+    val temp: Double,
+    val humidity: Int? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -35,5 +37,10 @@ data class WeatherData(
 @JsonClass(generateAdapter = true)
 data class CloudsData(
     val all: Int
+)
+
+@JsonClass(generateAdapter = true)
+data class WindData(
+    val speed: Double? = null
 )
 

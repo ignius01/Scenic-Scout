@@ -121,4 +121,113 @@ object GeminiClient {
             return@withContext "Failed to connect to Gemini AI: ${e.localizedMessage}"
         }
     }
+
+    suspend fun getOptimalSettings(
+        latitude: Double,
+        longitude: Double,
+        landscapeType: String,
+        timeOfDay: String,
+        weatherStatus: String,
+        temperature: String,
+        cloudCoverage: Int,
+        cameraName: String,
+        isAnalog: Boolean,
+        availableLenses: String,
+        filmStocksList: String
+    ): String = withContext(Dispatchers.IO) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+            return@withContext "{\"error\": \"API Key not configured. Please add your GEMINI_API_KEY to your Secrets panel or .env file.\"}"
+        }
+
+        val prompt = """
+            You are an expert photography assistant. Recommend the optimal camera settings based on the current weather and location.
+            
+            Context:
+            - Location: $latitude, $longitude, landscape type: $landscapeType, time of day: $timeOfDay
+            - Weather: $weatherStatus, temperature: $temperature, cloud coverage: $cloudCoverage%
+            - Camera Name: $cameraName
+            - Camera Type: ${if (isAnalog) "Analog (Film)" else "Digital"}
+            - Available Lenses: $availableLenses
+            - Preferred Film Stocks (for analog): $filmStocksList
+
+            Recommend optimal settings from the available camera specs/lenses/film stocks if specified, or suggest suitable ones.
+            Please return a JSON block EXACTLY in this format, with no markdown wrappers, no backticks, and no extra text outside the JSON:
+            {
+              "filmStock": "Recommended film stock (or camera name if digital)",
+              "iso": 400,
+              "aperture": "f/8",
+              "shutterSpeed": "1/250s",
+              "notes": "Brief explanation why these settings are recommended for the weather/time."
+            }
+        """.trimIndent()
+
+        try {
+            val root = JSONObject()
+            val contentsArray = JSONArray()
+            val contentObj = JSONObject()
+            val partsArray = JSONArray()
+            val partObj = JSONObject()
+            partObj.put("text", prompt)
+            partsArray.put(partObj)
+            contentObj.put("parts", partsArray)
+            contentsArray.put(contentObj)
+            root.put("contents", contentsArray)
+
+            val systemInstructionObj = JSONObject()
+            val systemPartsArray = JSONArray()
+            val systemPartObj = JSONObject()
+            systemPartObj.put("text", "You are an expert camera settings assistant. Output only raw JSON and nothing else.")
+            systemPartsArray.put(systemPartObj)
+            systemInstructionObj.put("parts", systemPartsArray)
+            root.put("systemInstruction", systemInstructionObj)
+
+            val requestBodyJson = root.toString()
+            val mediaType = "application/json; charset=utf-8".toMediaType()
+            val body = requestBodyJson.toRequestBody(mediaType)
+
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+            val request = Request.Builder()
+                .url(url)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errBody = response.body?.string() ?: ""
+                    Log.e("GeminiClient", "API error: $errBody")
+                    return@withContext "{\"error\": \"API error: ${response.code}\"}"
+                }
+
+                val responseBodyStr = response.body?.string() ?: return@withContext "{\"error\": \"No response body\"}"
+                val responseJson = JSONObject(responseBodyStr)
+                val candidates = responseJson.optJSONArray("candidates")
+                if (candidates != null && candidates.length() > 0) {
+                    val candidate = candidates.getJSONObject(0)
+                    val content = candidate.optJSONObject("content")
+                    if (content != null) {
+                        val parts = content.optJSONArray("parts")
+                        if (parts != null && parts.length() > 0) {
+                            var text = parts.getJSONObject(0).optString("text", "{}")
+                            // Clean markdown if models add it anyway
+                            if (text.startsWith("```json")) {
+                                text = text.removePrefix("```json")
+                            }
+                            if (text.startsWith("```")) {
+                                text = text.removePrefix("```")
+                            }
+                            if (text.endsWith("```")) {
+                                text = text.removeSuffix("```")
+                            }
+                            return@withContext text.trim()
+                        }
+                    }
+                }
+                return@withContext "{\"error\": \"No candidates generated\"}"
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiClient", "Execution error", e)
+            return@withContext "{\"error\": \"${e.localizedMessage}\"}"
+        }
+    }
 }

@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 class ScenicViewModel(
@@ -20,12 +22,45 @@ class ScenicViewModel(
     val firebaseBackupManager: com.example.data.FirebaseBackupManager
 ) : ViewModel() {
 
+    private val _quickScoutTrigger = Channel<Unit>(Channel.BUFFERED)
+    val quickScoutTrigger = _quickScoutTrigger.receiveAsFlow()
+
+    private val _hasUnsavedChanges = MutableStateFlow(false)
+    val hasUnsavedChanges: StateFlow<Boolean> = _hasUnsavedChanges.asStateFlow()
+
+    fun setHasUnsavedChanges(value: Boolean) {
+        _hasUnsavedChanges.value = value
+    }
+
+    fun triggerQuickScoutFromTile() {
+        viewModelScope.launch {
+            _quickScoutTrigger.send(Unit)
+        }
+    }
+
     val allPins: StateFlow<List<ScenicPin>> = repository.getAllPins()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    init {
+        viewModelScope.launch {
+            allPins.collect { pins ->
+                if (firebaseBackupManager.isLoggedIn) {
+                    firebaseBackupManager.backupPins(pins)
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            // At startup, if signed in, automatically restore/sync pins from the cloud to merge them
+            if (firebaseBackupManager.isLoggedIn) {
+                restorePinsFromBackup(onSuccess = {}, onFailure = {})
+            }
+        }
+    }
 
     private val _selectedPinId = MutableStateFlow<Long?>(null)
     val selectedPinId: StateFlow<Long?> = _selectedPinId.asStateFlow()
@@ -53,6 +88,7 @@ class ScenicViewModel(
         aperture: String = "f/8",
         notes: String = "",
         photoUri: String? = null,
+        shutterSpeed: String = "1/125s",
         context: Context
     ) {
         viewModelScope.launch {
@@ -67,7 +103,8 @@ class ScenicViewModel(
                 iso = iso,
                 aperture = aperture,
                 notes = notes,
-                photoUri = photoUri
+                photoUri = photoUri,
+                shutterSpeed = shutterSpeed
             )
             repository.insertPin(pin)
             settingsManager.setLastLocalChangeTime(System.currentTimeMillis())
@@ -92,6 +129,13 @@ class ScenicViewModel(
         }
     }
 
+    fun syncWeatherForPin(pinId: Long) {
+        viewModelScope.launch {
+            repository.syncWeatherForPin(pinId)
+            settingsManager.setLastLocalChangeTime(System.currentTimeMillis())
+        }
+    }
+
     fun backupPinsToCloud(onSuccess: () -> Unit, onFailure: (Throwable) -> Unit) {
         viewModelScope.launch {
             val pins = allPins.value
@@ -109,8 +153,12 @@ class ScenicViewModel(
 
     fun restorePinsFromBackup(onSuccess: (Int) -> Unit, onFailure: (Throwable) -> Unit) {
         viewModelScope.launch {
+            val existingPins = allPins.value
             val result = firebaseBackupManager.restorePins { pin ->
-                repository.insertPin(pin)
+                val alreadyExists = existingPins.any { it.timestamp == pin.timestamp && it.name == pin.name }
+                if (!alreadyExists) {
+                    repository.insertPin(pin)
+                }
             }
             result.onSuccess { count ->
                 val now = System.currentTimeMillis()

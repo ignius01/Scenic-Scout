@@ -30,6 +30,8 @@ data class ScenicPinEntity(
     val temperature: Double?,
     val weatherStatus: String?,
     val cloudCoverage: Int?,
+    val humidity: Int?,
+    val windSpeed: Double?,
     val isWeatherSynced: Boolean,
 
     // Celestial Calculations
@@ -41,7 +43,8 @@ data class ScenicPinEntity(
     val goldenHourStart: String,
     val goldenHourEnd: String,
     val twilightStart: String,
-    val twilightEnd: String
+    val twilightEnd: String,
+    val shutterSpeed: String = "1/125s"
 ) {
     fun toDomain(): ScenicPin = ScenicPin(
         id = id,
@@ -59,6 +62,8 @@ data class ScenicPinEntity(
         temperature = temperature,
         weatherStatus = weatherStatus,
         cloudCoverage = cloudCoverage,
+        humidity = humidity,
+        windSpeed = windSpeed,
         isWeatherSynced = isWeatherSynced,
         sunAltitude = sunAltitude,
         sunAzimuth = sunAzimuth,
@@ -68,7 +73,8 @@ data class ScenicPinEntity(
         goldenHourStart = goldenHourStart,
         goldenHourEnd = goldenHourEnd,
         twilightStart = twilightStart,
-        twilightEnd = twilightEnd
+        twilightEnd = twilightEnd,
+        shutterSpeed = shutterSpeed
     )
 
     companion object {
@@ -88,6 +94,8 @@ data class ScenicPinEntity(
             temperature = pin.temperature,
             weatherStatus = pin.weatherStatus,
             cloudCoverage = pin.cloudCoverage,
+            humidity = pin.humidity,
+            windSpeed = pin.windSpeed,
             isWeatherSynced = pin.isWeatherSynced,
             sunAltitude = pin.sunAltitude,
             sunAzimuth = pin.sunAzimuth,
@@ -97,7 +105,8 @@ data class ScenicPinEntity(
             goldenHourStart = pin.goldenHourStart,
             goldenHourEnd = pin.goldenHourEnd,
             twilightStart = pin.twilightStart,
-            twilightEnd = pin.twilightEnd
+            twilightEnd = pin.twilightEnd,
+            shutterSpeed = pin.shutterSpeed
         )
     }
 }

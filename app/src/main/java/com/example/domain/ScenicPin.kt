@@ -22,6 +22,8 @@ data class ScenicPin(
     val temperature: Double? = null,
     val weatherStatus: String? = null,
     val cloudCoverage: Int? = null,
+    val humidity: Int? = null,
+    val windSpeed: Double? = null,
     val isWeatherSynced: Boolean = false,
 
     // Celestial Calculations (Computed offline or cached)
@@ -33,5 +35,6 @@ data class ScenicPin(
     val goldenHourStart: String = "",
     val goldenHourEnd: String = "",
     val twilightStart: String = "",
-    val twilightEnd: String = ""
+    val twilightEnd: String = "",
+    val shutterSpeed: String = "1/125s"
 )

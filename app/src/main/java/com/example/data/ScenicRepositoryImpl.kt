@@ -35,6 +35,8 @@ class ScenicRepositoryImpl(
         var temperature = pin.temperature
         var weatherStatus = pin.weatherStatus
         var cloudCoverage = pin.cloudCoverage
+        var humidity = pin.humidity
+        var windSpeed = pin.windSpeed
         var isWeatherSynced = pin.isWeatherSynced
         
         if (!isWeatherSynced) {
@@ -49,6 +51,8 @@ class ScenicRepositoryImpl(
                     temperature = response.main.temp
                     weatherStatus = response.weather.firstOrNull()?.main ?: "Clear"
                     cloudCoverage = response.clouds.all
+                    humidity = response.main.humidity
+                    windSpeed = response.wind?.speed
                     isWeatherSynced = true
                     Log.d("ScenicRepository", "Successfully fetched weather on save for coordinates ${pin.latitude}, ${pin.longitude}")
                 } else {
@@ -72,6 +76,8 @@ class ScenicRepositoryImpl(
             temperature = temperature,
             weatherStatus = weatherStatus,
             cloudCoverage = cloudCoverage,
+            humidity = humidity,
+            windSpeed = windSpeed,
             isWeatherSynced = isWeatherSynced
         )
         pinDao.insertPin(ScenicPinEntity.fromDomain(enrichedPin))
@@ -114,6 +120,8 @@ class ScenicRepositoryImpl(
                     temperature = response.main.temp,
                     weatherStatus = response.weather.firstOrNull()?.main ?: "Clear",
                     cloudCoverage = response.clouds.all,
+                    humidity = response.main.humidity,
+                    windSpeed = response.wind?.speed,
                     isWeatherSynced = true
                 )
                 pinDao.updatePin(updatedEntity)

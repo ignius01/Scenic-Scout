@@ -22,10 +22,10 @@ class SettingsManagerTest {
 
         assertFalse(settingsManager.useFahrenheit.value)
         assertFalse(settingsManager.useDmsCoordinates.value)
-        assertEquals("Portra 400", settingsManager.defaultFilmStock.value)
-        assertEquals(400, settingsManager.defaultIso.value)
-        assertEquals("f/8", settingsManager.defaultAperture.value)
+        assertFalse(settingsManager.use24HourFormat.value)
         assertTrue(settingsManager.enableHaptic.value)
+        assertEquals(0L, settingsManager.lastSyncTime.value)
+        assertEquals(0L, settingsManager.lastLocalChangeTime.value)
     }
 
     @Test
@@ -39,16 +39,16 @@ class SettingsManagerTest {
         settingsManager.setUseDmsCoordinates(true)
         assertTrue(settingsManager.useDmsCoordinates.value)
 
-        settingsManager.setDefaultFilmStock("Ektar 100")
-        assertEquals("Ektar 100", settingsManager.defaultFilmStock.value)
-
-        settingsManager.setDefaultIso(100)
-        assertEquals(100, settingsManager.defaultIso.value)
-
-        settingsManager.setDefaultAperture("f/2.8")
-        assertEquals("f/2.8", settingsManager.defaultAperture.value)
+        settingsManager.setUse24HourFormat(true)
+        assertTrue(settingsManager.use24HourFormat.value)
 
         settingsManager.setEnableHaptic(false)
         assertFalse(settingsManager.enableHaptic.value)
+
+        settingsManager.setLastSyncTime(123456L)
+        assertEquals(123456L, settingsManager.lastSyncTime.value)
+
+        settingsManager.setLastLocalChangeTime(789012L)
+        assertEquals(789012L, settingsManager.lastLocalChangeTime.value)
     }
 }

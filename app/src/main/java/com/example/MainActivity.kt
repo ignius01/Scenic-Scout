@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,20 +17,20 @@ import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
     
+    private val viewModel: ScenicViewModel by viewModels {
+        val appContainer = AppContainer(applicationContext)
+        ScenicViewModel.Factory(
+            appContainer.scenicRepository,
+            appContainer.settingsManager,
+            appContainer.firebaseBackupManager
+        )
+    }
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Setup Dependency Injection container manually for 100% robust compiles
-        val appContainer = AppContainer(applicationContext)
-        
-        // Initialize viewmodel
-        val viewModel: ScenicViewModel by viewModels {
-            ScenicViewModel.Factory(
-                appContainer.scenicRepository,
-                appContainer.settingsManager,
-                appContainer.firebaseBackupManager
-            )
-        }
+        // Handle incoming intent action
+        handleIntent(intent, viewModel)
         
         enableEdgeToEdge()
         setContent {
@@ -41,6 +42,18 @@ class MainActivity : ComponentActivity() {
                     ScenicApp(viewModel = viewModel)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent, viewModel)
+    }
+
+    private fun handleIntent(intent: Intent?, viewModel: ScenicViewModel) {
+        if (intent != null && intent.getStringExtra("action") == "quick_scout") {
+            viewModel.triggerQuickScoutFromTile()
         }
     }
 }
