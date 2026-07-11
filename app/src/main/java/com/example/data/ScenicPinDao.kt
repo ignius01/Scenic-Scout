@@ -19,6 +19,9 @@ interface ScenicPinDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPin(pin: ScenicPinEntity): Long
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPins(pins: List<ScenicPinEntity>)
+
     @Update
     suspend fun updatePin(pin: ScenicPinEntity)
 

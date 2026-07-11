@@ -11,7 +11,7 @@ class AppContainer(private val context: Context) {
         ScenicDatabase.getDatabase(context)
     }
 
-    private val weatherApi: WeatherApi by lazy {
+    val weatherApi: WeatherApi by lazy {
         Retrofit.Builder()
             .baseUrl("https://api.openweathermap.org/")
             .addConverterFactory(MoshiConverterFactory.create())
@@ -30,7 +30,8 @@ class AppContainer(private val context: Context) {
     val scenicRepository: ScenicRepository by lazy {
         ScenicRepositoryImpl(
             pinDao = database.scenicPinDao(),
-            weatherApi = weatherApi
+            weatherApi = weatherApi,
+            context = context
         )
     }
 }

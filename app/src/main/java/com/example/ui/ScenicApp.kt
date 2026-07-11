@@ -11,6 +11,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -21,11 +22,21 @@ import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,6 +58,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -159,6 +171,11 @@ enum class ScenicTab {
     USER
 }
 
+enum class FoldPosture {
+    FLAT_BOOK,   // Vertical hinge split (Left Map, Right Dashboard)
+    TABLETOP     // Horizontal hinge split (Top Map, Bottom Dashboard)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScenicApp(viewModel: ScenicViewModel) {
@@ -187,14 +204,43 @@ fun ScenicApp(viewModel: ScenicViewModel) {
             action()
         }
     }
-    
+
+    val view = androidx.compose.ui.platform.LocalView.current
+    val triggerHaptic = {
+        if (enableHaptic) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        }
+    }
+    val triggerHapticLight = {
+        if (enableHaptic) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
+
     // Responsive layout sizing based on standard foldables / screen dimensions
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp
     val isExpanded = screenWidthDp >= 600
 
     LaunchedEffect(isExpanded) {
-        if (isExpanded && activeTab == ScenicTab.MAP) {
+        if (isExpanded && activeTab == ScenicTab.HOME) {
+            activeTab = ScenicTab.MAP
+        }
+    }
+
+    val isBackEnabled = if (isExpanded) {
+        selectedPin != null || activeTab != ScenicTab.MAP
+    } else {
+        selectedPin != null || activeTab != ScenicTab.HOME
+    }
+    BackHandler(enabled = isBackEnabled) {
+        if (selectedPin != null) {
+            viewModel.selectPin(null)
+        } else if (isExpanded) {
+            if (activeTab != ScenicTab.MAP) {
+                activeTab = ScenicTab.MAP
+            }
+        } else if (activeTab != ScenicTab.HOME) {
             activeTab = ScenicTab.HOME
         }
     }
@@ -206,7 +252,10 @@ fun ScenicApp(viewModel: ScenicViewModel) {
     }
 
     // Draggable Split Pane properties
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
     var splitRatio by remember { mutableStateOf(0.5f) }
+    var foldPosture by remember { mutableStateOf(FoldPosture.FLAT_BOOK) }
+    var isSidebarExpanded by remember { mutableStateOf(false) }
     
     // UI dialog triggers
     var showAddDialog by remember { mutableStateOf(false) }
@@ -226,10 +275,13 @@ fun ScenicApp(viewModel: ScenicViewModel) {
     }
 
     LaunchedEffect(Unit) {
-        val permissions = arrayOf(
+        val permissions = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
         val needed = permissions.filter {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
@@ -240,66 +292,73 @@ fun ScenicApp(viewModel: ScenicViewModel) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Explore,
-                            contentDescription = "Explore",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Scenic Scout",
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontFamily = FontFamily.Serif,
-                                fontWeight = FontWeight.Normal,
-                                letterSpacing = 0.5.sp
+            if (!isExpanded) {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Explore,
+                                contentDescription = "Explore",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
                             )
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground,
-                    actionIconContentColor = MaterialTheme.colorScheme.primary
-                ),
-                actions = {
-                    IconButton(
-                        onClick = {
-                            // Instant capture with GPS or fallback
-                            triggerQuickScout(context, viewModel)
-                        },
-                        modifier = Modifier.testTag("app_bar_quick_scout_btn")
-                    ) {
-                        Icon(Icons.Default.AddLocationAlt, contentDescription = "Quick Scout", tint = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            )
-        },
-        bottomBar = {
-            NavigationBar(
-                modifier = Modifier.fillMaxWidth().testTag("scenic_bottom_nav"),
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp
-            ) {
-                NavigationBarItem(
-                    selected = activeTab == ScenicTab.HOME,
-                    onClick = {
-                        navigateWithWarning {
-                            activeTab = ScenicTab.HOME
-                            viewModel.selectPin(null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Scenic Scout",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            )
                         }
                     },
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
-                    label = { Text(if (isExpanded) "Home (Map)" else "Home") },
-                    modifier = Modifier.testTag("nav_home_btn")
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        actionIconContentColor = MaterialTheme.colorScheme.primary
+                    ),
+                    actions = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            IconButton(onClick = {}) {
+                                Icon(Icons.Default.CloudDone, contentDescription = "Synced", tint = MaterialTheme.colorScheme.primary)
+                            }
+                            IconButton(onClick = {}) {
+                                Icon(Icons.Default.OfflinePin, contentDescription = "Offline Cache", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
                 )
-                if (!isExpanded) {
+            }
+        },
+        bottomBar = {
+            if (!isExpanded) {
+                NavigationBar(
+                    modifier = Modifier.fillMaxWidth().testTag("scenic_bottom_nav"),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 4.dp
+                ) {
+                    NavigationBarItem(
+                        selected = activeTab == ScenicTab.HOME,
+                        onClick = {
+                            triggerHapticLight()
+                            navigateWithWarning {
+                                activeTab = ScenicTab.HOME
+                                viewModel.selectPin(null)
+                            }
+                        },
+                        icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                        label = { Text("Home") },
+                        modifier = Modifier.testTag("nav_home_btn")
+                    )
                     NavigationBarItem(
                         selected = activeTab == ScenicTab.MAP,
                         onClick = {
+                            triggerHapticLight()
                             navigateWithWarning {
                                 activeTab = ScenicTab.MAP
                             }
@@ -308,119 +367,359 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         label = { Text("Map") },
                         modifier = Modifier.testTag("nav_map_btn")
                     )
+                    NavigationBarItem(
+                        selected = activeTab == ScenicTab.SETTINGS,
+                        onClick = {
+                            triggerHapticLight()
+                            navigateWithWarning {
+                                activeTab = ScenicTab.SETTINGS
+                            }
+                        },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                        label = { Text("Settings") },
+                        modifier = Modifier.testTag("nav_settings_btn")
+                    )
+                    NavigationBarItem(
+                        selected = activeTab == ScenicTab.USER,
+                        onClick = {
+                            triggerHapticLight()
+                            navigateWithWarning {
+                                activeTab = ScenicTab.USER
+                            }
+                        },
+                        icon = { Icon(Icons.Default.AccountCircle, contentDescription = "User") },
+                        label = { Text("User") },
+                        modifier = Modifier.testTag("nav_user_btn")
+                    )
                 }
-                NavigationBarItem(
-                    selected = activeTab == ScenicTab.SETTINGS,
-                    onClick = {
-                        navigateWithWarning {
-                            activeTab = ScenicTab.SETTINGS
-                        }
-                    },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                    label = { Text("Settings") },
-                    modifier = Modifier.testTag("nav_settings_btn")
-                )
-                NavigationBarItem(
-                    selected = activeTab == ScenicTab.USER,
-                    onClick = {
-                        navigateWithWarning {
-                            activeTab = ScenicTab.USER
-                        }
-                    },
-                    icon = { Icon(Icons.Default.AccountCircle, contentDescription = "User") },
-                    label = { Text("User") },
-                    modifier = Modifier.testTag("nav_user_btn")
-                )
             }
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            SyncStatusIndicator(viewModel)
-            Box(
+            if (isExpanded) {
+                val sidebarWidth = if (isSidebarExpanded) 256.dp else 76.dp
+                val animatedSidebarWidth by animateDpAsState(
+                    targetValue = sidebarWidth,
+                    animationSpec = spring(stiffness = Spring.StiffnessLow),
+                    label = "sidebarWidth"
+                )
+                Column(
+                    modifier = Modifier
+                        .width(animatedSidebarWidth)
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(vertical = 24.dp, horizontal = if (isSidebarExpanded) 12.dp else 8.dp)
+                ) {
+                    // Brand logo / Toggle
+                    if (isSidebarExpanded) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Explore,
+                                    contentDescription = "Explore",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Scenic Scout",
+                                    style = MaterialTheme.typography.titleLarge.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontSize = 18.sp
+                                    )
+                                )
+                            }
+                            IconButton(
+                                onClick = { isSidebarExpanded = false },
+                                modifier = Modifier.testTag("sidebar_collapse_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowBack,
+                                    contentDescription = "Collapse Sidebar",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Explore,
+                                contentDescription = "Explore",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            IconButton(
+                                onClick = { isSidebarExpanded = true },
+                                modifier = Modifier.testTag("sidebar_expand_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowForward,
+                                    contentDescription = "Expand Sidebar",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(32.dp))
+                    
+                    // Navigation Items
+                    val menuItems = listOf(
+                        Triple(ScenicTab.MAP, "Field Map", Icons.Default.Map),
+                        Triple(ScenicTab.SETTINGS, "Settings", Icons.Default.Settings),
+                        Triple(ScenicTab.USER, "User Profile", Icons.Default.AccountCircle)
+                    )
+                    
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = if (isSidebarExpanded) Alignment.Start else Alignment.CenterHorizontally
+                    ) {
+                        menuItems.forEach { (tab, label, icon) ->
+                            val isSelected = activeTab == tab
+                            val bg = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+                            val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                            val textWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(bg)
+                                    .clickable {
+                                        triggerHapticLight()
+                                        navigateWithWarning {
+                                            activeTab = tab
+                                            if (tab == ScenicTab.HOME) {
+                                                viewModel.selectPin(null)
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = if (isSidebarExpanded) 16.dp else 12.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = if (isSidebarExpanded) Arrangement.Start else Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = label,
+                                    tint = contentColor,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                if (isSidebarExpanded) {
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontSize = 16.sp,
+                                            fontWeight = textWeight,
+                                            color = contentColor
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                )
+            }
+
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .weight(1f)
             ) {
+                if (!isExpanded || activeTab != ScenicTab.MAP) {
+                    SyncStatusIndicator(viewModel)
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f)
+                ) {
             when (activeTab) {
                 ScenicTab.HOME -> {
                     if (isExpanded) {
-                        // Dual Display Split layout (Folded Opened / Tablet Mode)
-                        Row(modifier = Modifier.fillMaxSize()) {
-                            // Left Pane (Google Map / Fallback Custom Canvas Map)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .weight(splitRatio)
-                            ) {
-                                InteractiveMapView(
-                                    pins = allPins,
-                                    selectedPin = selectedPin,
-                                    onPinSelected = { viewModel.selectPin(it) },
-                                    onMapClicked = { lat, lng ->
-                                        selectedLocationForAdd = Pair(lat, lng)
-                                        showAddDialog = true
-                                    }
-                                )
-                            }
-
-                            // Interactive Draggable Divider
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .width(8.dp)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                                    .pointerInput(Unit) {
-                                        detectHorizontalDragGestures { change, dragAmount ->
-                                            change.consume()
-                                            val dragDelta = dragAmount / screenWidthDp
-                                            splitRatio = (splitRatio + dragDelta).coerceIn(0.25f, 0.75f)
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                if (foldPosture == FoldPosture.FLAT_BOOK) {
+                                    // Row split layout (Book Mode)
+                                    Row(modifier = Modifier.fillMaxSize()) {
+                                        // Left Pane: Map
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .weight(splitRatio)
+                                        ) {
+                                            InteractiveMapView(
+                                                pins = allPins,
+                                                selectedPin = selectedPin,
+                                                onPinSelected = { viewModel.selectPin(it) },
+                                                onMapClicked = { lat, lng ->
+                                                    selectedLocationForAdd = Pair(lat, lng)
+                                                    showAddDialog = true
+                                                }
+                                            )
                                         }
-                                    }
-                                    .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight(0.15f)
-                                        .width(3.dp)
-                                        .clip(RoundedCornerShape(2.dp))
-                                        .background(MaterialTheme.colorScheme.onSurfaceVariant)
-                                )
-                            }
 
-                            // Right Pane (Data Dashboard & Analog Field Notes)
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .weight(1f - splitRatio)
-                                    .background(MaterialTheme.colorScheme.surface)
-                            ) {
-                                if (selectedPin != null) {
-                                    EnvironmentalDashboard(
-                                        pin = selectedPin!!,
-                                        useFahrenheit = useFahrenheit,
-                                        useDmsCoordinates = useDmsCoordinates,
-                                        use24HourFormat = use24HourFormat,
-                                        viewModel = viewModel,
-                                        onUpdatePin = { viewModel.updatePin(it) },
-                                        onDeletePin = { viewModel.deletePin(it) },
-                                        onCapturePhoto = { pinId ->
-                                            cameraActivePinId = pinId
-                                            showCameraDialog = true
-                                        },
-                                        onClearSelection = {
-                                            navigateWithWarning {
-                                                viewModel.selectPin(null)
+                                        // Interactive Draggable Divider
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .width(8.dp)
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .pointerInput(Unit) {
+                                                    detectHorizontalDragGestures { change, dragAmount ->
+                                                        change.consume()
+                                                        val dragDelta = dragAmount / (screenWidthDp * density)
+                                                        splitRatio = (splitRatio + dragDelta).coerceIn(0.25f, 0.75f)
+                                                    }
+                                                }
+                                                .clickable(enabled = false) {},
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxHeight(0.15f)
+                                                    .width(3.dp)
+                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
+                                            )
+                                        }
+
+                                        // Right Pane: Dashboard
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .weight(1f - splitRatio)
+                                                .background(MaterialTheme.colorScheme.surface)
+                                        ) {
+                                            if (selectedPin != null) {
+                                                EnvironmentalDashboard(
+                                                    pin = selectedPin!!,
+                                                    useFahrenheit = useFahrenheit,
+                                                    useDmsCoordinates = useDmsCoordinates,
+                                                    use24HourFormat = use24HourFormat,
+                                                    viewModel = viewModel,
+                                                    onUpdatePin = { viewModel.updatePin(it) },
+                                                    onDeletePin = { viewModel.deletePin(it) },
+                                                    onCapturePhoto = { pinId ->
+                                                        cameraActivePinId = pinId
+                                                        showCameraDialog = true
+                                                    },
+                                                    onClearSelection = {
+                                                        navigateWithWarning {
+                                                            viewModel.selectPin(null)
+                                                        }
+                                                    }
+                                                )
+                                            } else {
+                                                EmptyDashboardState(allPins, viewModel) { viewModel.selectPin(it) }
                                             }
                                         }
-                                    )
+                                    }
                                 } else {
-                                    EmptyDashboardState(allPins) { viewModel.selectPin(it) }
+                                    // Column split layout (Tabletop Mode)
+                                    Column(modifier = Modifier.fillMaxSize()) {
+                                        // Top Pane: Map
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .weight(splitRatio)
+                                        ) {
+                                            InteractiveMapView(
+                                                pins = allPins,
+                                                selectedPin = selectedPin,
+                                                onPinSelected = { viewModel.selectPin(it) },
+                                                onMapClicked = { lat, lng ->
+                                                    selectedLocationForAdd = Pair(lat, lng)
+                                                    showAddDialog = true
+                                                }
+                                            )
+                                        }
+
+                                        // Horizontal Draggable Divider
+                                        val screenHeightDp = configuration.screenHeightDp
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(8.dp)
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .pointerInput(Unit) {
+                                                    detectVerticalDragGestures { change, dragAmount ->
+                                                        change.consume()
+                                                        val dragDelta = dragAmount / (screenHeightDp * density)
+                                                        splitRatio = (splitRatio + dragDelta).coerceIn(0.25f, 0.75f)
+                                                    }
+                                                }
+                                                .clickable(enabled = false) {},
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.15f)
+                                                    .height(3.dp)
+                                                    .clip(RoundedCornerShape(2.dp))
+                                                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
+                                            )
+                                        }
+
+                                        // Bottom Pane: Dashboard
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .weight(1f - splitRatio)
+                                                .background(MaterialTheme.colorScheme.surface)
+                                        ) {
+                                            if (selectedPin != null) {
+                                                EnvironmentalDashboard(
+                                                    pin = selectedPin!!,
+                                                    useFahrenheit = useFahrenheit,
+                                                    useDmsCoordinates = useDmsCoordinates,
+                                                    use24HourFormat = use24HourFormat,
+                                                    viewModel = viewModel,
+                                                    onUpdatePin = { viewModel.updatePin(it) },
+                                                    onDeletePin = { viewModel.deletePin(it) },
+                                                    onCapturePhoto = { pinId ->
+                                                        cameraActivePinId = pinId
+                                                        showCameraDialog = true
+                                                    },
+                                                    onClearSelection = {
+                                                        navigateWithWarning {
+                                                            viewModel.selectPin(null)
+                                                        }
+                                                    }
+                                                )
+                                            } else {
+                                                EmptyDashboardState(allPins, viewModel) { viewModel.selectPin(it) }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -496,11 +795,22 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                                                 SwipeToDismissBox(
                                                     state = dismissState,
                                                     backgroundContent = {
-                                                        val color = when (dismissState.dismissDirection) {
+                                                        val targetColor = when (dismissState.dismissDirection) {
                                                             SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.primaryContainer
                                                             SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer
                                                             else -> Color.Transparent
                                                         }
+                                                        val animatedColor by animateColorAsState(
+                                                            targetValue = targetColor,
+                                                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                                            label = "dismiss_color_anim"
+                                                        )
+                                                        val targetScale = if (dismissState.dismissDirection != SwipeToDismissBoxValue.Settled) 1.1f else 0.8f
+                                                        val animatedScale by animateFloatAsState(
+                                                            targetValue = targetScale,
+                                                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                                                            label = "dismiss_scale_anim"
+                                                        )
                                                         val alignment = when (dismissState.dismissDirection) {
                                                             SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
                                                             SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
@@ -521,11 +831,17 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                                                             modifier = Modifier
                                                                 .fillMaxSize()
                                                                 .clip(RoundedCornerShape(12.dp))
-                                                                .background(color)
+                                                                .background(animatedColor)
                                                                 .padding(horizontal = 16.dp),
                                                             contentAlignment = alignment
                                                         ) {
-                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                modifier = Modifier.graphicsLayer(
+                                                                    scaleX = animatedScale,
+                                                                    scaleY = animatedScale
+                                                                )
+                                                            ) {
                                                                 if (dismissState.dismissDirection == SwipeToDismissBoxValue.StartToEnd) {
                                                                     Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.onPrimaryContainer)
                                                                     Spacer(modifier = Modifier.width(8.dp))
@@ -592,16 +908,261 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                                 }
                             )
                         }
+                    } else {
+                        val mapWeight by animateFloatAsState(
+                            targetValue = if (selectedPin != null) 0.5f else 1f,
+                            animationSpec = spring(stiffness = Spring.StiffnessLow),
+                            label = "mapWeight"
+                        )
+                        
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            // Left pane: Full Screen Immersive Map (shrinks dynamically)
+                            Box(
+                                modifier = Modifier
+                                    .weight(mapWeight)
+                                    .fillMaxHeight()
+                            ) {
+                                InteractiveMapView(
+                                    pins = allPins,
+                                    selectedPin = selectedPin,
+                                    onPinSelected = { pin ->
+                                        viewModel.selectPin(pin)
+                                    },
+                                    onMapClicked = { lat, lng ->
+                                        selectedLocationForAdd = Pair(lat, lng)
+                                        showAddDialog = true
+                                    }
+                                )
+
+                                val coroutineScope = rememberCoroutineScope()
+                                val context = LocalContext.current
+
+                                // Floating Bento Panel: Weather & Recent Pins
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = selectedPin == null,
+                                    enter = fadeIn() + expandVertically(),
+                                    exit = fadeOut() + shrinkVertically(),
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(16.dp)
+                                        .width(360.dp)
+                                ) {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f)
+                                        ),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                        )
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .padding(16.dp)
+                                                .verticalScroll(rememberScrollState()),
+                                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                                        ) {
+                                            // 1. Cloud & Cache Status Card inside the floating bento
+                                            Card(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                                )
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.weight(1.2f)
+                                                    ) {
+                                                        val lastSyncTime by viewModel.settingsManager.lastSyncTime.collectAsStateWithLifecycle()
+                                                        val lastLocalChangeTime by viewModel.settingsManager.lastLocalChangeTime.collectAsStateWithLifecycle()
+                                                        val isSyncing by viewModel.firebaseBackupManager.isSyncing.collectAsStateWithLifecycle()
+                                                        
+                                                        if (isSyncing) {
+                                                            CircularProgressIndicator(
+                                                                modifier = Modifier.size(16.dp),
+                                                                strokeWidth = 2.dp,
+                                                                color = MaterialTheme.colorScheme.primary
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Text(
+                                                                text = "Syncing...",
+                                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                                                color = MaterialTheme.colorScheme.primary
+                                                            )
+                                                        } else {
+                                                            val isUpToDate = lastLocalChangeTime <= lastSyncTime || (lastSyncTime > 0 && lastLocalChangeTime == 0L)
+                                                            val icon = if (lastSyncTime == 0L) Icons.Default.CloudOff else if (isUpToDate) Icons.Default.CloudDone else Icons.Default.CloudSync
+                                                            val text = if (lastSyncTime == 0L) "Local-Only" else if (isUpToDate) "Cloud-Synced" else "Unsynced Edits"
+                                                            val iconColor = if (lastSyncTime == 0L) MaterialTheme.colorScheme.onSurfaceVariant else if (isUpToDate) MaterialTheme.colorScheme.primary else Color(0xFFE65100)
+                                                            
+                                                            Icon(
+                                                                imageVector = icon,
+                                                                contentDescription = null,
+                                                                tint = iconColor,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                            Column {
+                                                                Text(
+                                                                    text = text,
+                                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                                    color = MaterialTheme.colorScheme.onSurface
+                                                                )
+                                                                val syncText = if (lastSyncTime > 0L) {
+                                                                    val sdf = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
+                                                                    sdf.format(Date(lastSyncTime))
+                                                                } else {
+                                                                    "Offline mode"
+                                                                }
+                                                                Text(
+                                                                    text = syncText,
+                                                                    fontSize = 10.sp,
+                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .height(24.dp)
+                                                            .width(1.dp)
+                                                            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                                    )
+
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.End,
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .padding(start = 8.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.OfflinePin,
+                                                            contentDescription = null,
+                                                            tint = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Column {
+                                                            Text(
+                                                                text = "Map Cache",
+                                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                                color = MaterialTheme.colorScheme.onSurface
+                                                            )
+                                                            Text(
+                                                                text = "Offline-Ready",
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Medium,
+                                                                color = MaterialTheme.colorScheme.primary
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // 2. Weather Widget inside the floating bento
+                                            FloatingWeatherWidget(viewModel = viewModel, useFahrenheit = useFahrenheit)
+
+                                            // 3. Recent Pins List inside the floating bento
+                                            FloatingRecentPinsWidget(allPins = allPins, onPinClick = { viewModel.selectPin(it) })
+                                        }
+                                    }
+                                }
+
+                                // Center/bottom Quick Scout FAB
+                                FloatingActionButton(
+                                    onClick = {
+                                        triggerQuickScout(context, viewModel)
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(bottom = 32.dp)
+                                        .height(56.dp)
+                                        .widthIn(min = 180.dp),
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    shape = RoundedCornerShape(28.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 24.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.AddLocationAlt,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text(
+                                            text = "QUICK SCOUT",
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 1.5.sp,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Right pane: Half-Screen slider / Details panel
+                            if (mapWeight < 0.99f) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f - mapWeight)
+                                        .fillMaxHeight()
+                                        .background(MaterialTheme.colorScheme.surface)
+                                ) {
+                                    if (selectedPin != null) {
+                                        EnvironmentalDashboard(
+                                            pin = selectedPin!!,
+                                            useFahrenheit = useFahrenheit,
+                                            useDmsCoordinates = useDmsCoordinates,
+                                            use24HourFormat = use24HourFormat,
+                                            viewModel = viewModel,
+                                            onUpdatePin = { viewModel.updatePin(it) },
+                                            onDeletePin = { viewModel.deletePin(it) },
+                                            onCapturePhoto = { pinId ->
+                                                cameraActivePinId = pinId
+                                                showCameraDialog = true
+                                            },
+                                            onClearSelection = {
+                                                navigateWithWarning {
+                                                    viewModel.selectPin(null)
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 ScenicTab.SETTINGS -> {
-                    SettingsScreen(viewModel = viewModel)
+                    SettingsScreen(
+                        viewModel = viewModel,
+                        foldPosture = foldPosture,
+                        onFoldPostureChange = { foldPosture = it }
+                    )
                 }
                 ScenicTab.USER -> {
                     AccountScreen(viewModel = viewModel)
                 }
             }
         }
+    }
+}
 
         // Add Pin Dialog
         if (showAddDialog && selectedLocationForAdd != null) {
@@ -694,17 +1255,20 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                 }
             )
         }
-        }
     }
 }
 
 @Composable
 fun QuickScoutHeroButton(onClick: () -> Unit) {
+    val view = androidx.compose.ui.platform.LocalView.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .height(96.dp)
-            .clickable { onClick() }
+            .clickable {
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                onClick()
+            }
             .testTag("quick_scout_hero_card"),
         shape = RoundedCornerShape(32.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary),
@@ -741,10 +1305,14 @@ fun CompactPinItem(
     useDmsCoordinates: Boolean,
     onClick: () -> Unit
 ) {
+    val view = androidx.compose.ui.platform.LocalView.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .clickable {
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                onClick()
+            }
             .testTag("compact_pin_item_${pin.id}"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -791,17 +1359,33 @@ fun CompactPinItem(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = "ISO ${pin.iso}",
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.primary
+                val weatherIcon = when {
+                    pin.weatherStatus?.lowercase()?.contains("clear") == true -> Icons.Outlined.WbSunny
+                    pin.weatherStatus?.lowercase()?.contains("cloud") == true -> Icons.Outlined.Cloud
+                    pin.weatherStatus?.lowercase()?.contains("rain") == true -> Icons.Outlined.Umbrella
+                    pin.weatherStatus?.lowercase()?.contains("snow") == true -> Icons.Outlined.AcUnit
+                    else -> Icons.Outlined.CloudQueue
+                }
+                val weatherLabel = pin.weatherStatus ?: "Pending"
+                val weatherColor = when {
+                    pin.weatherStatus?.lowercase()?.contains("clear") == true -> Color(0xFFFFB300) // Sunny Amber
+                    pin.weatherStatus?.lowercase()?.contains("cloud") == true -> MaterialTheme.colorScheme.primary
+                    pin.weatherStatus?.lowercase()?.contains("rain") == true -> Color(0xFF2196F3) // Rainy Blue
+                    pin.weatherStatus?.lowercase()?.contains("snow") == true -> Color(0xFF00BCD4) // Cyan / Snow
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                }
+                Icon(
+                    imageVector = weatherIcon,
+                    contentDescription = "Weather: $weatherLabel",
+                    tint = weatherColor,
+                    modifier = Modifier.size(24.dp)
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = pin.filmStock.ifEmpty { "Digital" },
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    text = weatherLabel,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                 )
             }
         }
@@ -809,58 +1393,482 @@ fun CompactPinItem(
 }
 
 @Composable
-fun EmptyDashboardState(allPins: List<ScenicPin>, onSelectPin: (ScenicPin) -> Unit) {
+fun WeatherWidget(
+    style: String,
+    content: String,
+    temp: Double?,
+    desc: String?,
+    wind: Double?,
+    humidity: Int?,
+    city: String?,
+    useFahrenheit: Boolean,
+    isLoading: Boolean,
+    error: String?
+) {
+    if (isLoading) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+        ) {
+            Box(modifier = Modifier.fillMaxWidth().height(110.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+            }
+        }
+        return
+    }
+
+    if (error != null) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Outlined.CloudQueue, contentDescription = null, tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Weather Widget Offline", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                Text("Verify OpenWeather API key in secrets", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+            }
+        }
+        return
+    }
+
+    if (temp == null) return
+
+    val displayTemp = if (useFahrenheit) {
+        "${((temp * 9 / 5) + 32).toInt()}°F"
+    } else {
+        "${temp.toInt()}°C"
+    }
+
+    val displayWind = if (useFahrenheit) {
+        val mph = (wind ?: 0.0) * 2.23694
+        String.format("%.1f mph", mph)
+    } else {
+        String.format("%.1f m/s", wind ?: 0.0)
+    }
+
+    val weatherIcon = when {
+        desc?.lowercase()?.contains("clear") == true -> Icons.Outlined.WbSunny
+        desc?.lowercase()?.contains("cloud") == true -> Icons.Outlined.Cloud
+        desc?.lowercase()?.contains("rain") == true -> Icons.Outlined.Umbrella
+        desc?.lowercase()?.contains("snow") == true -> Icons.Outlined.AcUnit
+        else -> Icons.Outlined.CloudQueue
+    }
+
+    val iconColor = when {
+        desc?.lowercase()?.contains("clear") == true -> Color(0xFFFFB300)
+        desc?.lowercase()?.contains("cloud") == true -> MaterialTheme.colorScheme.primary
+        desc?.lowercase()?.contains("rain") == true -> Color(0xFF2196F3)
+        desc?.lowercase()?.contains("snow") == true -> Color(0xFF00BCD4)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    when (style) {
+        "Compact" -> {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("weather_widget_compact"),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(weatherIcon, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(displayTemp, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(desc ?: "Clear", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (city != null) {
+                        Text(city, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                    }
+                }
+            }
+        }
+        "Minimalist" -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("weather_widget_minimalist")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(weatherIcon, contentDescription = null, tint = iconColor, modifier = Modifier.size(28.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(displayTemp, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Light)
+                            Text(desc ?: "Clear", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (city != null) {
+                        Text(city, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                    }
+                }
+                
+                if (content != "Temp Only" && (wind != null || humidity != null)) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        if (content == "Full Details" || content == "Temp + Wind") {
+                            Text("Wind: $displayWind", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                        }
+                        if (content == "Full Details" && humidity != null) {
+                            Text("Humidity: $humidity%", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+                        }
+                    }
+                }
+            }
+        }
+        else -> { // "Glassmorphic" / Default
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("weather_widget_glassmorphic"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column {
+                            if (city != null) {
+                                Text(
+                                    text = city,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = displayTemp,
+                                style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        
+                        Column(horizontalAlignment = Alignment.End) {
+                            Icon(
+                                imageVector = weatherIcon,
+                                contentDescription = null,
+                                tint = iconColor,
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = desc ?: "Clear",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    
+                    if (content != "Temp Only" && (wind != null || humidity != null)) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            if (content == "Full Details" || content == "Temp + Wind") {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Air,
+                                        contentDescription = "Wind Speed",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = displayWind,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            if (content == "Full Details" && humidity != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.WaterDrop,
+                                        contentDescription = "Humidity",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "Humidity: $humidity%",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EmptyDashboardState(
+    allPins: List<ScenicPin>,
+    viewModel: ScenicViewModel,
+    onSelectPin: (ScenicPin) -> Unit
+) {
+    val context = LocalContext.current
+    val settingsManager = viewModel.settingsManager
+    
+    val showWeatherWidget by settingsManager.showWeatherWidget.collectAsStateWithLifecycle()
+    val weatherWidgetStyle by settingsManager.weatherWidgetStyle.collectAsStateWithLifecycle()
+    val weatherWidgetContent by settingsManager.weatherWidgetContent.collectAsStateWithLifecycle()
+    val useFahrenheit by settingsManager.useFahrenheit.collectAsStateWithLifecycle()
+    val useDmsCoordinates by settingsManager.useDmsCoordinates.collectAsStateWithLifecycle()
+
+    var weatherTemp by remember { mutableStateOf<Double?>(null) }
+    var weatherDesc by remember { mutableStateOf<String?>(null) }
+    var weatherWind by remember { mutableStateOf<Double?>(null) }
+    var weatherHumidity by remember { mutableStateOf<Int?>(null) }
+    var weatherIconCode by remember { mutableStateOf<String?>(null) }
+    var isLoadingWeather by remember { mutableStateOf(false) }
+    var weatherError by remember { mutableStateOf<String?>(null) }
+    var weatherCity by remember { mutableStateOf<String?>(null) }
+
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(showWeatherWidget, allPins) {
+        if (!showWeatherWidget) return@LaunchedEffect
+        
+        isLoadingWeather = true
+        weatherError = null
+        
+        val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                            
+        val triggerFetch: (Double, Double) -> Unit = { lat, lon ->
+            coroutineScope.launch {
+                val result = viewModel.fetchCurrentWeather(lat, lon)
+                result.onSuccess { response ->
+                    weatherTemp = response.main.temp
+                    weatherDesc = response.weather.firstOrNull()?.description?.capitalize(Locale.getDefault()) ?: "Clear"
+                    weatherWind = response.wind?.speed
+                    weatherHumidity = response.main.humidity
+                    weatherIconCode = response.weather.firstOrNull()?.main ?: "Clear"
+                    isLoadingWeather = false
+                }.onFailure { err ->
+                    weatherError = err.localizedMessage ?: "Failed to fetch weather"
+                    isLoadingWeather = false
+                }
+            }
+        }
+
+        if (hasPermission) {
+            try {
+                fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                    if (location != null) {
+                        triggerFetch(location.latitude, location.longitude)
+                        weatherCity = "Current Location"
+                    } else {
+                        val recentPin = allPins.firstOrNull()
+                        if (recentPin != null) {
+                            triggerFetch(recentPin.latitude, recentPin.longitude)
+                            weatherCity = "Near ${recentPin.name}"
+                        } else {
+                            triggerFetch(40.7128, -74.0060)
+                            weatherCity = "New York (Default)"
+                        }
+                    }
+                }.addOnFailureListener {
+                    val recentPin = allPins.firstOrNull()
+                    if (recentPin != null) {
+                        triggerFetch(recentPin.latitude, recentPin.longitude)
+                        weatherCity = "Near ${recentPin.name}"
+                    } else {
+                        triggerFetch(40.7128, -74.0060)
+                        weatherCity = "New York (Default)"
+                    }
+                }
+            } catch (e: SecurityException) {
+                val recentPin = allPins.firstOrNull()
+                if (recentPin != null) {
+                    triggerFetch(recentPin.latitude, recentPin.longitude)
+                    weatherCity = "Near ${recentPin.name}"
+                } else {
+                    triggerFetch(40.7128, -74.0060)
+                    weatherCity = "New York (Default)"
+                }
+            }
+        } else {
+            val recentPin = allPins.firstOrNull()
+            if (recentPin != null) {
+                triggerFetch(recentPin.latitude, recentPin.longitude)
+                weatherCity = "Near ${recentPin.name}"
+            } else {
+                triggerFetch(40.7128, -74.0060)
+                weatherCity = "New York (Default)"
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Icon(
-            imageVector = Icons.Default.Timeline,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
-            modifier = Modifier.size(64.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Environmental Data Engine",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Select a marker on the map to display solar altitudes, Golden Hour timings, precise weather details, and custom analog photography notes.",
-            textAlign = TextAlign.Center,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        
-        if (allPins.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = "Quick Select:",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
+        if (showWeatherWidget) {
+            WeatherWidget(
+                style = weatherWidgetStyle,
+                content = weatherWidgetContent,
+                temp = weatherTemp,
+                desc = weatherDesc,
+                wind = weatherWind,
+                humidity = weatherHumidity,
+                city = weatherCity,
+                useFahrenheit = useFahrenheit,
+                isLoading = isLoadingWeather,
+                error = weatherError
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
-                items(allPins.take(3), key = { it.id }) { pin ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable { onSelectPin(pin) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Timeline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
+                    modifier = Modifier.size(56.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Scenic Scout Dashboard",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Explore solar altitudes, golden hours, and weather details.",
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f))
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Tap any map marker or tap-hold to log a new spot.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Recent Pins",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (allPins.isNotEmpty()) {
+                    Text(
+                        text = "${allPins.size} spots logged",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            if (allPins.isEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text(
-                            pin.name,
-                            modifier = Modifier.padding(12.dp),
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp
+                        Icon(
+                            imageVector = Icons.Default.LocationOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(40.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "No Pins Logged Yet",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Pins logged on the map will appear here.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                allPins.take(5).forEach { pin ->
+                    CompactPinItem(
+                        pin = pin,
+                        useFahrenheit = useFahrenheit,
+                        useDmsCoordinates = useDmsCoordinates
+                    ) {
+                        onSelectPin(pin)
                     }
                 }
             }
@@ -876,6 +1884,7 @@ fun InteractiveMapView(
     onMapClicked: (Double, Double) -> Unit
 ) {
     val context = LocalContext.current
+    val view = androidx.compose.ui.platform.LocalView.current
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -1031,6 +2040,7 @@ fun InteractiveMapView(
                     .padding(4.dp)
             ) {
                 IconButton(onClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
                     coroutineScope.launch {
                         cameraPositionState.animate(
                             com.google.android.gms.maps.CameraUpdateFactory.zoomOut()
@@ -1040,6 +2050,7 @@ fun InteractiveMapView(
                     Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = MaterialTheme.colorScheme.primary)
                 }
                 IconButton(onClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
                     coroutineScope.launch {
                         cameraPositionState.animate(
                             com.google.android.gms.maps.CameraUpdateFactory.zoomIn()
@@ -1053,6 +2064,7 @@ fun InteractiveMapView(
             // Current Location FAB
             FloatingActionButton(
                 onClick = {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                     if (hasPermission) {
                         try {
                             fusedLocationClient.lastLocation.addOnSuccessListener { location ->
@@ -1433,10 +2445,42 @@ fun EnvironmentalDashboard(
 
             // Weather Data Dashboard Card (Detailed)
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().testTag("weather_section_card"),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    var isCurrentWeatherSelected by remember { mutableStateOf(false) }
+
+                    var currentTemp by remember { mutableStateOf<Double?>(null) }
+                    var currentStatus by remember { mutableStateOf<String?>(null) }
+                    var currentClouds by remember { mutableStateOf<Int?>(null) }
+                    var currentHumidity by remember { mutableStateOf<Int?>(null) }
+                    var currentWindSpeed by remember { mutableStateOf<Double?>(null) }
+                    var isLoadingCurrentWeather by remember { mutableStateOf(false) }
+                    var currentWeatherError by remember { mutableStateOf<String?>(null) }
+                    val coroutineScope = rememberCoroutineScope()
+
+                    LaunchedEffect(isCurrentWeatherSelected, pin.id) {
+                        if (isCurrentWeatherSelected && currentTemp == null) {
+                            isLoadingCurrentWeather = true
+                            currentWeatherError = null
+                            coroutineScope.launch {
+                                val result = viewModel.fetchCurrentWeather(pin.latitude, pin.longitude)
+                                result.onSuccess { response ->
+                                    currentTemp = response.main.temp
+                                    currentStatus = response.weather.firstOrNull()?.description?.capitalize(Locale.getDefault()) ?: "Clear"
+                                    currentClouds = response.clouds.all
+                                    currentHumidity = response.main.humidity
+                                    currentWindSpeed = response.wind?.speed
+                                    isLoadingCurrentWeather = false
+                                }.onFailure { err ->
+                                    currentWeatherError = err.localizedMessage ?: "Failed to fetch weather"
+                                    isLoadingCurrentWeather = false
+                                }
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1451,7 +2495,7 @@ fun EnvironmentalDashboard(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                "Live Weather Scout",
+                                "Weather",
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -1460,7 +2504,13 @@ fun EnvironmentalDashboard(
                         
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(
-                                onClick = { viewModel.syncWeatherForPin(pin.id) },
+                                onClick = {
+                                    if (isCurrentWeatherSelected) {
+                                        currentTemp = null // re-trigger fetch
+                                    } else {
+                                        viewModel.syncWeatherForPin(pin.id)
+                                    }
+                                },
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
@@ -1472,130 +2522,145 @@ fun EnvironmentalDashboard(
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(
-                                imageVector = if (pin.isWeatherSynced) Icons.Default.CloudQueue else Icons.Default.CloudOff,
+                                imageVector = if (isCurrentWeatherSelected) {
+                                    if (currentTemp != null) Icons.Default.CloudQueue else Icons.Default.CloudOff
+                                } else {
+                                    if (pin.isWeatherSynced) Icons.Default.CloudQueue else Icons.Default.CloudOff
+                                },
                                 contentDescription = null,
-                                tint = if (pin.isWeatherSynced) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                tint = if (isCurrentWeatherSelected) {
+                                    if (currentTemp != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                } else {
+                                    if (pin.isWeatherSynced) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                },
                                 modifier = Modifier.size(20.dp)
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            WeatherMetricCard(
-                                label = "Temperature",
-                                value = formatTemperature(pin.temperature, useFahrenheit),
-                                icon = Icons.Outlined.Thermostat,
-                                modifier = Modifier.weight(1f)
-                            )
-                            WeatherMetricCard(
-                                label = "Condition",
-                                value = pin.weatherStatus ?: "Pending",
-                                icon = when {
-                                    pin.weatherStatus?.lowercase()?.contains("clear") == true -> Icons.Outlined.WbSunny
-                                    pin.weatherStatus?.lowercase()?.contains("cloud") == true -> Icons.Outlined.Cloud
-                                    pin.weatherStatus?.lowercase()?.contains("rain") == true -> Icons.Outlined.Umbrella
-                                    pin.weatherStatus?.lowercase()?.contains("snow") == true -> Icons.Outlined.AcUnit
-                                    else -> Icons.Outlined.CloudQueue
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            WeatherMetricCard(
-                                label = "Clouds",
-                                value = if (pin.cloudCoverage != null) "${pin.cloudCoverage}%" else "N/A",
-                                icon = Icons.Outlined.FilterDrama,
-                                modifier = Modifier.weight(1f)
-                            )
-                            WeatherMetricCard(
-                                label = "Humidity",
-                                value = if (pin.humidity != null) "${pin.humidity}%" else "N/A",
-                                icon = Icons.Outlined.WaterDrop,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            WeatherMetricCard(
-                                label = "Wind Speed",
-                                value = if (pin.windSpeed != null) "${pin.windSpeed} m/s" else "N/A",
-                                icon = Icons.Outlined.Air,
-                                modifier = Modifier.weight(1f)
-                            )
-                            WeatherMetricCard(
-                                label = "Sync Status",
-                                value = if (pin.isWeatherSynced) "Connected" else "Offline",
-                                icon = if (pin.isWeatherSynced) Icons.Outlined.Sync else Icons.Outlined.CloudOff,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
                     
                     Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Dynamic photography impact advice box
-                    val weatherAdvice = remember(pin.weatherStatus) {
-                        val status = pin.weatherStatus?.lowercase() ?: "pending"
-                        when {
-                            status.contains("clear") -> {
-                                "☀️ Golden Hour Golden Ticket: High contrast, harsh midday shadows. Perfect for dramatic silhouettes or vibrant twilight skies. Tip: Use a polarizing filter to saturate blues and reduce reflection haze."
-                            }
-                            status.contains("cloud") || status.contains("overcast") -> {
-                                "☁️ Dreamy Softbox Light: Diffused cloud cover eliminates harsh shadows, offering perfect even light. Peak conditions for lush forests, foliage, waterfalls, and close-up portraits."
-                            }
-                            status.contains("rain") || status.contains("drizzle") -> {
-                                "🌧️ Cinematic Reflections: Rain saturates colors and produces brilliant reflective streets. Exceptional for urban moody photography. Protect your equipment!"
-                            }
-                            status.contains("snow") -> {
-                                "❄️ High-Key Brilliance: Snow reflects heavy ambient light. Light meters will underexpose to compensate, turning snow grey. Set exposure compensation to +1.0 or +1.5."
-                            }
-                            status.contains("thunder") || status.contains("storm") -> {
-                                "⛈️ High Drama Skies: Dark, dynamic cloud build-ups create epic moods. Excellent for sweeps of landscape, motion trails, or capturing lightning strikes."
-                            }
-                            status.contains("mist") || status.contains("fog") || status.contains("haze") -> {
-                                "🌫️ Ethereal Isolation: Fog physically isolates subjects, adding stunning depth perspective and minimalist mystery. Ideal for singular trees or silhouetted paths."
-                            }
-                            status == "pending" -> {
-                                "🔄 Weather not synced yet. Tap the Sync button to get localized astronomical & weather recommendations for this scout location."
-                            }
-                            else -> {
-                                "📸 Scenic Photography Alert: Variable sky conditions. Watch for dynamic light breaking through clouds—excellent for dramatic mountain shots."
-                            }
-                        }
-                    }
-                    
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.25f)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+
+                    // Mode Toggle Switch Control
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.Top
+                        Text(
+                            text = "At Scout Time",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (!isCurrentWeatherSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (!isCurrentWeatherSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Switch(
+                            checked = isCurrentWeatherSelected,
+                            onCheckedChange = { isCurrentWeatherSelected = it },
+                            modifier = Modifier.testTag("weather_mode_toggle_switch")
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Current Weather",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isCurrentWeatherSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isCurrentWeatherSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (isCurrentWeatherSelected && isLoadingCurrentWeather) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Camera,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp).padding(top = 2.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
+                            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                        }
+                    } else if (isCurrentWeatherSelected && currentWeatherError != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp)
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Outlined.CloudOff, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Scout Photography Impact",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
+                                    text = "Offline: $currentWeatherError",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = weatherAdvice,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp
+                            }
+                        }
+                    } else {
+                        val temp = if (isCurrentWeatherSelected) currentTemp else pin.temperature
+                        val status = if (isCurrentWeatherSelected) currentStatus else (pin.weatherStatus ?: "Pending")
+                        val clouds = if (isCurrentWeatherSelected) currentClouds else pin.cloudCoverage
+                        val humidity = if (isCurrentWeatherSelected) currentHumidity else pin.humidity
+                        val windSpeed = if (isCurrentWeatherSelected) currentWindSpeed else pin.windSpeed
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                WeatherMetricCard(
+                                    label = "Temperature",
+                                    value = formatTemperature(temp, useFahrenheit),
+                                    icon = Icons.Outlined.Thermostat,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                WeatherMetricCard(
+                                    label = "Condition",
+                                    value = status ?: "Pending",
+                                    icon = when {
+                                        status?.lowercase()?.contains("clear") == true -> Icons.Outlined.WbSunny
+                                        status?.lowercase()?.contains("cloud") == true -> Icons.Outlined.Cloud
+                                        status?.lowercase()?.contains("rain") == true -> Icons.Outlined.Umbrella
+                                        status?.lowercase()?.contains("snow") == true -> Icons.Outlined.AcUnit
+                                        else -> Icons.Outlined.CloudQueue
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                WeatherMetricCard(
+                                    label = "Clouds",
+                                    value = if (clouds != null) "$clouds%" else "N/A",
+                                    icon = Icons.Outlined.FilterDrama,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                WeatherMetricCard(
+                                    label = "Humidity",
+                                    value = if (humidity != null) "$humidity%" else "N/A",
+                                    icon = Icons.Outlined.WaterDrop,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                WeatherMetricCard(
+                                    label = "Wind Speed",
+                                    value = if (windSpeed != null) "$windSpeed m/s" else "N/A",
+                                    icon = Icons.Outlined.Air,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                WeatherMetricCard(
+                                    label = "Sync Status",
+                                    value = if (isCurrentWeatherSelected) {
+                                        if (currentTemp != null) "Connected" else "Offline"
+                                    } else {
+                                        if (pin.isWeatherSynced) "Connected" else "Offline"
+                                    },
+                                    icon = if (isCurrentWeatherSelected) {
+                                        if (currentTemp != null) Icons.Outlined.Sync else Icons.Outlined.CloudOff
+                                    } else {
+                                        if (pin.isWeatherSynced) Icons.Outlined.Sync else Icons.Outlined.CloudOff
+                                    },
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
                         }
@@ -1721,20 +2786,12 @@ fun EditPinDialog(
     var name by remember { mutableStateOf(pin.name) }
     var type by remember { mutableStateOf(pin.landscapeType) }
     var timeCategory by remember { mutableStateOf(pin.timeOfDayCategory) }
-    var filmStock by remember { mutableStateOf(pin.filmStock) }
-    var iso by remember { mutableStateOf(pin.iso.toString()) }
-    var aperture by remember { mutableStateOf(pin.aperture) }
-    var notes by remember { mutableStateOf(pin.notes) }
 
     var showDiscardWarning by remember { mutableStateOf(false) }
 
     val hasChanges = name != pin.name ||
                      type != pin.landscapeType ||
-                     timeCategory != pin.timeOfDayCategory ||
-                     filmStock != pin.filmStock ||
-                     iso != pin.iso.toString() ||
-                     aperture != pin.aperture ||
-                     notes != pin.notes
+                     timeCategory != pin.timeOfDayCategory
 
     val handleExit = {
         if (hasChanges) {
@@ -1773,6 +2830,10 @@ fun EditPinDialog(
 
     AlertDialog(
         onDismissRequest = handleExit,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
         title = { Text("Edit Scenic Scout Location") },
         text = {
             Column(
@@ -1807,7 +2868,15 @@ fun EditPinDialog(
                                             tint = if (type == t) MaterialTheme.colorScheme.onPrimaryContainer else getLandscapeTypeColor(t)
                                         )
                                     },
-                                    label = { Text(t, fontSize = 10.sp) },
+                                    label = {
+                                        Text(
+                                            text = t,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -1824,7 +2893,16 @@ fun EditPinDialog(
                         FilterChip(
                             selected = timeCategory == tm,
                             onClick = { timeCategory = tm },
-                            label = { Text(tm, fontSize = 11.sp) }
+                            label = {
+                                Text(
+                                    text = tm,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -1836,43 +2914,19 @@ fun EditPinDialog(
                         FilterChip(
                             selected = timeCategory == tm,
                             onClick = { timeCategory = tm },
-                            label = { Text(tm, fontSize = 11.sp) }
+                            label = {
+                                Text(
+                                    text = tm,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
-
-                OutlinedTextField(
-                    value = filmStock,
-                    onValueChange = { filmStock = it },
-                    label = { Text("Film Stock / Sensor") },
-                    modifier = Modifier.fillMaxWidth().testTag("edit_pin_film_input")
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = iso,
-                        onValueChange = { iso = it },
-                        label = { Text("ISO") },
-                        modifier = Modifier.weight(1f).testTag("edit_pin_iso_input")
-                    )
-                    OutlinedTextField(
-                        value = aperture,
-                        onValueChange = { aperture = it },
-                        label = { Text("Aperture") },
-                        modifier = Modifier.weight(1f).testTag("edit_pin_aperture_input")
-                    )
-                }
-
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("Analog Field Notes") },
-                    modifier = Modifier.fillMaxWidth().testTag("edit_pin_notes_input"),
-                    maxLines = 3
-                )
             }
         },
         confirmButton = {
@@ -1882,11 +2936,7 @@ fun EditPinDialog(
                         pin.copy(
                             name = name,
                             landscapeType = type,
-                            timeOfDayCategory = timeCategory,
-                            filmStock = filmStock,
-                            iso = iso.toIntOrNull() ?: 100,
-                            aperture = aperture,
-                            notes = notes
+                            timeOfDayCategory = timeCategory
                         )
                     )
                 },
@@ -1922,6 +2972,10 @@ fun AddPinDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
         title = { Text("Log New Scenic Scout") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1951,7 +3005,15 @@ fun AddPinDialog(
                                             tint = if (type == t) MaterialTheme.colorScheme.onPrimaryContainer else getLandscapeTypeColor(t)
                                         )
                                     },
-                                    label = { Text(t, fontSize = 10.sp) },
+                                    label = {
+                                        Text(
+                                            text = t,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
@@ -1968,7 +3030,16 @@ fun AddPinDialog(
                         FilterChip(
                             selected = timeCategory == tm,
                             onClick = { timeCategory = tm },
-                            label = { Text(tm, fontSize = 11.sp) }
+                            label = {
+                                Text(
+                                    text = tm,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -1980,7 +3051,16 @@ fun AddPinDialog(
                         FilterChip(
                             selected = timeCategory == tm,
                             onClick = { timeCategory = tm },
-                            label = { Text(tm, fontSize = 11.sp) }
+                            label = {
+                                Text(
+                                    text = tm,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -2304,13 +3384,27 @@ private fun addQuickPin(context: Context, viewModel: ScenicViewModel, lat: Doubl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: ScenicViewModel) {
+fun SettingsScreen(
+    viewModel: ScenicViewModel,
+    foldPosture: FoldPosture,
+    onFoldPostureChange: (FoldPosture) -> Unit
+) {
     val settingsManager = viewModel.settingsManager
 
     val useFahrenheit by settingsManager.useFahrenheit.collectAsStateWithLifecycle()
     val useDmsCoordinates by settingsManager.useDmsCoordinates.collectAsStateWithLifecycle()
     val use24HourFormat by settingsManager.use24HourFormat.collectAsStateWithLifecycle()
     val enableHaptic by settingsManager.enableHaptic.collectAsStateWithLifecycle()
+    val showWeatherWidget by settingsManager.showWeatherWidget.collectAsStateWithLifecycle()
+    val weatherWidgetStyle by settingsManager.weatherWidgetStyle.collectAsStateWithLifecycle()
+    val weatherWidgetContent by settingsManager.weatherWidgetContent.collectAsStateWithLifecycle()
+
+    val view = androidx.compose.ui.platform.LocalView.current
+    val triggerHapticLight = {
+        if (enableHaptic) {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -2397,7 +3491,10 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                     ) {
                         FilterChip(
                             selected = !useFahrenheit,
-                            onClick = { settingsManager.setUseFahrenheit(false) },
+                            onClick = {
+                                triggerHapticLight()
+                                settingsManager.setUseFahrenheit(false)
+                            },
                             label = { Text("Celsius (°C)", fontSize = 11.sp) },
                             leadingIcon = if (!useFahrenheit) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
@@ -2406,7 +3503,10 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                         )
                         FilterChip(
                             selected = useFahrenheit,
-                            onClick = { settingsManager.setUseFahrenheit(true) },
+                            onClick = {
+                                triggerHapticLight()
+                                settingsManager.setUseFahrenheit(true)
+                            },
                             label = { Text("Fahrenheit (°F)", fontSize = 11.sp) },
                             leadingIcon = if (useFahrenheit) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
@@ -2445,7 +3545,10 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                     ) {
                         FilterChip(
                             selected = !useDmsCoordinates,
-                            onClick = { settingsManager.setUseDmsCoordinates(false) },
+                            onClick = {
+                                triggerHapticLight()
+                                settingsManager.setUseDmsCoordinates(false)
+                            },
                             label = { Text("Decimal Degrees", fontSize = 11.sp) },
                             leadingIcon = if (!useDmsCoordinates) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
@@ -2454,7 +3557,10 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                         )
                         FilterChip(
                             selected = useDmsCoordinates,
-                            onClick = { settingsManager.setUseDmsCoordinates(true) },
+                            onClick = {
+                                triggerHapticLight()
+                                settingsManager.setUseDmsCoordinates(true)
+                            },
                             label = { Text("DMS Format", fontSize = 11.sp) },
                             leadingIcon = if (useDmsCoordinates) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
@@ -2493,7 +3599,10 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                     ) {
                         FilterChip(
                             selected = !use24HourFormat,
-                            onClick = { settingsManager.setUse24HourFormat(false) },
+                            onClick = {
+                                triggerHapticLight()
+                                settingsManager.setUse24HourFormat(false)
+                            },
                             label = { Text("12-hour (AM/PM)", fontSize = 11.sp) },
                             leadingIcon = if (!use24HourFormat) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
@@ -2502,7 +3611,10 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                         )
                         FilterChip(
                             selected = use24HourFormat,
-                            onClick = { settingsManager.setUse24HourFormat(true) },
+                            onClick = {
+                                triggerHapticLight()
+                                settingsManager.setUse24HourFormat(true)
+                            },
                             label = { Text("24-hour", fontSize = 11.sp) },
                             leadingIcon = if (use24HourFormat) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
@@ -2559,9 +3671,223 @@ fun SettingsScreen(viewModel: ScenicViewModel) {
                 }
                 Switch(
                     checked = enableHaptic,
-                    onCheckedChange = { settingsManager.setEnableHaptic(it) },
+                    onCheckedChange = { 
+                        settingsManager.setEnableHaptic(it)
+                        if (it) {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                        } else {
+                            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                        }
+                    },
                     modifier = Modifier.testTag("settings_haptic_switch")
                 )
+            }
+        }
+
+        // CARD: Weather Widget Configuration
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("weather_widget_settings_card"),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ),
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Icon(
+                            imageVector = Icons.Default.Cloud,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Current Weather Widget",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Show real-time local weather at the top of empty state",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = showWeatherWidget,
+                        onCheckedChange = {
+                            triggerHapticLight()
+                            settingsManager.setShowWeatherWidget(it)
+                        },
+                        modifier = Modifier.testTag("settings_weather_widget_switch")
+                    )
+                }
+
+                if (showWeatherWidget) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f))
+
+                    // Widget Style Selector
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Palette,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Widget Style",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Text(
+                            "Choose the visual presentation style of the weather card.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val styles = listOf("Glassmorphic", "Minimalist", "Compact")
+                            styles.forEach { style ->
+                                FilterChip(
+                                    selected = weatherWidgetStyle == style,
+                                    onClick = {
+                                        triggerHapticLight()
+                                        settingsManager.setWeatherWidgetStyle(style)
+                                    },
+                                    label = { Text(style, fontSize = 11.sp) },
+                                    modifier = Modifier.weight(1f).testTag("weather_style_${style.lowercase()}_chip")
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f))
+
+                    // Widget Content Density Selector
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Widget Content",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Text(
+                            "Configure how much weather telemetry to display.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val contents = listOf("Full Details", "Temp Only", "Temp + Wind")
+                            contents.forEach { content ->
+                                FilterChip(
+                                    selected = weatherWidgetContent == content,
+                                    onClick = {
+                                        triggerHapticLight()
+                                        settingsManager.setWeatherWidgetContent(content)
+                                    },
+                                    label = { Text(content, fontSize = 11.sp) },
+                                    modifier = Modifier.weight(1f).testTag("weather_content_${content.replace(" ", "_").lowercase()}_chip")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // CARD: Foldable Posture Settings
+        Card(
+            modifier = Modifier.fillMaxWidth().testTag("foldable_optimization_settings_card"),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+            ),
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Devices,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Pixel Fold Optimization",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Text(
+                    text = "Configure custom dual-pane or single-pane tabletop layouts for folded postures.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = foldPosture == FoldPosture.FLAT_BOOK,
+                        onClick = {
+                            triggerHapticLight()
+                            onFoldPostureChange(FoldPosture.FLAT_BOOK)
+                        },
+                        label = { Text("📖 Book Split", fontSize = 11.sp) },
+                        modifier = Modifier.weight(1f).testTag("settings_posture_book_chip")
+                    )
+                    FilterChip(
+                        selected = foldPosture == FoldPosture.TABLETOP,
+                        onClick = {
+                            triggerHapticLight()
+                            onFoldPostureChange(FoldPosture.TABLETOP)
+                        },
+                        label = { Text("🛋️ Tabletop", fontSize = 11.sp) },
+                        modifier = Modifier.weight(1f).testTag("settings_posture_tabletop_chip")
+                    )
+                }
             }
         }
     }
@@ -3246,6 +4572,229 @@ fun SyncStatusIndicator(viewModel: ScenicViewModel) {
                         style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Medium),
                         color = Color(0xFF2E7D32)
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FloatingWeatherWidget(viewModel: ScenicViewModel, useFahrenheit: Boolean) {
+    val coroutineScope = rememberCoroutineScope()
+    var weatherTemp by remember { mutableStateOf<Double?>(null) }
+    var weatherDesc by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val allPins by viewModel.allPins.collectAsStateWithLifecycle()
+    
+    LaunchedEffect(allPins) {
+        val triggerFetch: (Double, Double) -> Unit = { lat, lon ->
+            coroutineScope.launch {
+                val result = viewModel.fetchCurrentWeather(lat, lon)
+                result.onSuccess { response ->
+                    weatherTemp = response.main.temp
+                    weatherDesc = response.weather.firstOrNull()?.description?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() } ?: "Clear"
+                }
+            }
+        }
+        val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (hasPermission) {
+            try {
+                fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                    if (location != null) {
+                        triggerFetch(location.latitude, location.longitude)
+                    } else {
+                        val recentPin = allPins.firstOrNull()
+                        if (recentPin != null) {
+                            triggerFetch(recentPin.latitude, recentPin.longitude)
+                        } else {
+                            triggerFetch(40.7128, -74.0060)
+                        }
+                    }
+                }
+            } catch (e: SecurityException) {
+                triggerFetch(40.7128, -74.0060)
+            }
+        } else {
+            val recentPin = allPins.firstOrNull()
+            if (recentPin != null) {
+                triggerFetch(recentPin.latitude, recentPin.longitude)
+            } else {
+                triggerFetch(40.7128, -74.0060)
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = "Weather info",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    val displayTemp = if (useFahrenheit) {
+                        "${weatherTemp?.let { (it * 9 / 5 + 32).toInt() } ?: 77}°F"
+                    } else {
+                        "${weatherTemp?.toInt() ?: 25}°C"
+                    }
+                    Text(
+                        text = displayTemp,
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = weatherDesc ?: "Loading weather...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .border(
+                        1.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                        RoundedCornerShape(50)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "LIVE",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun FloatingRecentPinsWidget(allPins: List<com.example.domain.ScenicPin>, onPinClick: (com.example.domain.ScenicPin) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Recent Pins",
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(vertical = 4.dp)
+        )
+
+        if (allPins.isEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOff,
+                        contentDescription = "No pins logged yet",
+                        modifier = Modifier.size(36.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "No Pins Logged Yet",
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Log scenic locations to see them here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            allPins.take(5).forEach { pin ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPinClick(pin) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = getLandscapeIcon(pin.landscapeType),
+                                contentDescription = pin.landscapeType,
+                                tint = getLandscapeTypeColor(pin.landscapeType),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = pin.name,
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = pin.landscapeType,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = "Details",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }

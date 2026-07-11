@@ -28,6 +28,30 @@ class SettingsManager(context: Context) {
     private val _lastLocalChangeTime = MutableStateFlow(prefs.getLong("last_local_change_time", 0L))
     val lastLocalChangeTime: StateFlow<Long> = _lastLocalChangeTime.asStateFlow()
 
+    private val _showWeatherWidget = MutableStateFlow(prefs.getBoolean("show_weather_widget", true))
+    val showWeatherWidget: StateFlow<Boolean> = _showWeatherWidget.asStateFlow()
+
+    private val _weatherWidgetStyle = MutableStateFlow(prefs.getString("weather_widget_style", "Glassmorphic") ?: "Glassmorphic")
+    val weatherWidgetStyle: StateFlow<String> = _weatherWidgetStyle.asStateFlow()
+
+    private val _weatherWidgetContent = MutableStateFlow(prefs.getString("weather_widget_content", "Full Details") ?: "Full Details")
+    val weatherWidgetContent: StateFlow<String> = _weatherWidgetContent.asStateFlow()
+
+    fun setShowWeatherWidget(value: Boolean) {
+        prefs.edit().putBoolean("show_weather_widget", value).apply()
+        _showWeatherWidget.value = value
+    }
+
+    fun setWeatherWidgetStyle(value: String) {
+        prefs.edit().putString("weather_widget_style", value).apply()
+        _weatherWidgetStyle.value = value
+    }
+
+    fun setWeatherWidgetContent(value: String) {
+        prefs.edit().putString("weather_widget_content", value).apply()
+        _weatherWidgetContent.value = value
+    }
+
     fun setUseFahrenheit(value: Boolean) {
         prefs.edit().putBoolean("use_fahrenheit", value).apply()
         _useFahrenheit.value = value

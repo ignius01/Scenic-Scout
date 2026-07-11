@@ -1,43 +1,32 @@
 package com.example.background
 
-import android.app.ActivityOptions
-import android.annotation.SuppressLint
-import android.app.PendingIntent
-import android.content.Intent
-import android.os.Build
+import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
-import com.example.MainActivity
 
 class ScoutTileService : TileService() {
 
-    @SuppressLint("StartActivityAndCollapseDeprecated")
+    override fun onStartListening() {
+        super.onStartListening()
+        try {
+            val tile = qsTile
+            if (tile != null) {
+                tile.state = Tile.STATE_ACTIVE
+                tile.updateTile()
+            }
+        } catch (e: Exception) {
+            Log.e("ScoutTileService", "Failed to set tile state in onStartListening", e)
+        }
+    }
+
     override fun onClick() {
         super.onClick()
-        Log.d("ScoutTileService", "Quick Settings Tile tapped")
-
-        val context = applicationContext
-        val intent = Intent(context, MainActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            putExtra("action", "quick_scout")
-        }
-
+        Log.d("ScoutTileService", "Quick Settings Tile tapped - performing background scout")
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // Android 14+
-                val pendingIntent = PendingIntent.getActivity(
-                    context,
-                    0,
-                    intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-                startActivityAndCollapse(pendingIntent)
-            } else {
-                @Suppress("DEPRECATION")
-                startActivityAndCollapse(intent)
-            }
-            Log.d("ScoutTileService", "Launched MainActivity from Quick Settings Tile")
+            val context = applicationContext
+            BackgroundScoutHelper.performBackgroundScout(context, "Tile")
         } catch (e: Exception) {
-            Log.e("ScoutTileService", "Failed to start MainActivity from tile", e)
+            Log.e("ScoutTileService", "Failed to perform background scout from tile", e)
         }
     }
 }

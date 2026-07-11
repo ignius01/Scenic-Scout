@@ -19,7 +19,8 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MyApplication">
+        android:theme="@style/Theme.MyApplication"
+        android:enableOnBackInvokedCallback="true">
 
         <meta-data
             android:name="com.google.android.geo.API_KEY"
@@ -63,6 +64,28 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/scout_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".background.ScenicDialWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/scenic_dial_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".background.ScenicListWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/scenic_list_widget_info" />
         </receiver>
     </application>
 

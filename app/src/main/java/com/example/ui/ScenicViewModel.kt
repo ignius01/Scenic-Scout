@@ -15,12 +15,17 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.FlowPreview
 
 class ScenicViewModel(
     private val repository: ScenicRepository,
     val settingsManager: com.example.data.SettingsManager,
-    val firebaseBackupManager: com.example.data.FirebaseBackupManager
+    val firebaseBackupManager: com.example.data.FirebaseBackupManager,
+    val weatherApi: com.example.data.WeatherApi
 ) : ViewModel() {
+
+    private var isRestoringBackup = false
 
     private val _quickScoutTrigger = Channel<Unit>(Channel.BUFFERED)
     val quickScoutTrigger = _quickScoutTrigger.receiveAsFlow()
@@ -47,11 +52,19 @@ class ScenicViewModel(
 
     init {
         viewModelScope.launch {
-            allPins.collect { pins ->
-                if (firebaseBackupManager.isLoggedIn) {
-                    firebaseBackupManager.backupPins(pins)
+            @OptIn(FlowPreview::class)
+            allPins
+                .debounce(500)
+                .collect { pins ->
+                    if (firebaseBackupManager.isLoggedIn && !isRestoringBackup) {
+                        val result = firebaseBackupManager.backupPins(pins)
+                        result.onSuccess {
+                            val now = System.currentTimeMillis()
+                            settingsManager.setLastSyncTime(now)
+                            settingsManager.setLastLocalChangeTime(now)
+                        }
+                    }
                 }
-            }
         }
 
         viewModelScope.launch {
@@ -153,20 +166,29 @@ class ScenicViewModel(
 
     fun restorePinsFromBackup(onSuccess: (Int) -> Unit, onFailure: (Throwable) -> Unit) {
         viewModelScope.launch {
-            val existingPins = allPins.value
-            val result = firebaseBackupManager.restorePins { pin ->
-                val alreadyExists = existingPins.any { it.timestamp == pin.timestamp && it.name == pin.name }
-                if (!alreadyExists) {
-                    repository.insertPin(pin)
+            isRestoringBackup = true
+            try {
+                val existingPins = allPins.value
+                val toInsert = mutableListOf<ScenicPin>()
+                val result = firebaseBackupManager.restorePins { pin ->
+                    val alreadyExists = existingPins.any { it.timestamp == pin.timestamp && it.name == pin.name }
+                    if (!alreadyExists) {
+                        toInsert.add(pin)
+                    }
                 }
-            }
-            result.onSuccess { count ->
-                val now = System.currentTimeMillis()
-                settingsManager.setLastSyncTime(now)
-                settingsManager.setLastLocalChangeTime(now) // synchronized
-                onSuccess(count)
-            }.onFailure { exception ->
-                onFailure(exception)
+                result.onSuccess { count ->
+                    if (toInsert.isNotEmpty()) {
+                        repository.insertPins(toInsert)
+                    }
+                    val now = System.currentTimeMillis()
+                    settingsManager.setLastSyncTime(now)
+                    settingsManager.setLastLocalChangeTime(now) // synchronized
+                    onSuccess(count)
+                }.onFailure { exception ->
+                    onFailure(exception)
+                }
+            } finally {
+                isRestoringBackup = false
             }
         }
     }
@@ -182,15 +204,33 @@ class ScenicViewModel(
         }
     }
 
+    suspend fun fetchCurrentWeather(latitude: Double, longitude: Double): Result<com.example.data.WeatherResponse> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val apiKey = com.example.BuildConfig.OPENWEATHER_API_KEY
+            if (apiKey.isEmpty()) {
+                return@withContext Result.failure(Exception("Weather API key is empty"))
+            }
+            val response = weatherApi.getWeather(
+                lat = latitude,
+                lon = longitude,
+                apiKey = apiKey
+            )
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     class Factory(
         private val repository: ScenicRepository,
         private val settingsManager: com.example.data.SettingsManager,
-        private val firebaseBackupManager: com.example.data.FirebaseBackupManager
+        private val firebaseBackupManager: com.example.data.FirebaseBackupManager,
+        private val weatherApi: com.example.data.WeatherApi
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(ScenicViewModel::class.java)) {
-                return ScenicViewModel(repository, settingsManager, firebaseBackupManager) as T
+                return ScenicViewModel(repository, settingsManager, firebaseBackupManager, weatherApi) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
         }

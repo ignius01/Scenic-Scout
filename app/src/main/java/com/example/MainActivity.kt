@@ -22,7 +22,8 @@ class MainActivity : ComponentActivity() {
         ScenicViewModel.Factory(
             appContainer.scenicRepository,
             appContainer.settingsManager,
-            appContainer.firebaseBackupManager
+            appContainer.firebaseBackupManager,
+            appContainer.weatherApi
         )
     }
     

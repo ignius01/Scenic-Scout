@@ -129,7 +129,7 @@ class FirebaseBackupManager {
             if (document.exists()) {
                 val pinsList = document.get("pins") as? List<Map<String, Any?>> ?: emptyList()
                 for (pinMap in pinsList) {
-                    if (pinMap == null) continue
+                    if (pinMap.isEmpty()) continue
                     val name = pinMap["name"] as? String ?: "Restored Pin"
                     val lat = (pinMap["latitude"] as? Number)?.toDouble() ?: 0.0
                     val lng = (pinMap["longitude"] as? Number)?.toDouble() ?: 0.0
