@@ -14,6 +14,10 @@ import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import kotlinx.serialization.Serializable
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -94,6 +98,11 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.location.LocationServices
+
+@Serializable object HomeRoute
+@Serializable object MapRoute
+@Serializable object SettingsRoute
+@Serializable object UserRoute
 
 private val DarkMapStyleJson = """
 [
@@ -195,6 +204,38 @@ fun ScenicApp(viewModel: ScenicViewModel) {
     var activeTab by remember { mutableStateOf(ScenicTab.HOME) }
     var pendingNavAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var showUnsavedWarning by remember { mutableStateOf(false) }
+    val navController = rememberNavController()
+
+    LaunchedEffect(navController) {
+        navController.currentBackStackEntryFlow.collect { backStackEntry ->
+            val route = backStackEntry.destination.route
+            if (route != null) {
+                when {
+                    route.contains("HomeRoute") -> activeTab = ScenicTab.HOME
+                    route.contains("MapRoute") -> activeTab = ScenicTab.MAP
+                    route.contains("SettingsRoute") -> activeTab = ScenicTab.SETTINGS
+                    route.contains("UserRoute") -> activeTab = ScenicTab.USER
+                }
+            }
+        }
+    }
+
+    val navigateToTab = { tab: ScenicTab ->
+        if (tab == ScenicTab.HOME) {
+            viewModel.selectPin(null)
+        }
+        val route = when (tab) {
+            ScenicTab.HOME -> HomeRoute
+            ScenicTab.MAP -> MapRoute
+            ScenicTab.SETTINGS -> SettingsRoute
+            ScenicTab.USER -> UserRoute
+        }
+        navController.navigate(route) {
+            popUpTo(navController.graph.startDestinationId) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
     val navigateWithWarning = { action: () -> Unit ->
         if (hasUnsavedChanges) {
@@ -224,7 +265,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
 
     LaunchedEffect(isExpanded) {
         if (isExpanded && activeTab == ScenicTab.HOME) {
-            activeTab = ScenicTab.MAP
+            navigateToTab(ScenicTab.MAP)
         }
     }
 
@@ -238,10 +279,10 @@ fun ScenicApp(viewModel: ScenicViewModel) {
             viewModel.selectPin(null)
         } else if (isExpanded) {
             if (activeTab != ScenicTab.MAP) {
-                activeTab = ScenicTab.MAP
+                navigateToTab(ScenicTab.MAP)
             }
         } else if (activeTab != ScenicTab.HOME) {
-            activeTab = ScenicTab.HOME
+            navigateToTab(ScenicTab.HOME)
         }
     }
 
@@ -347,8 +388,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         onClick = {
                             triggerHapticLight()
                             navigateWithWarning {
-                                activeTab = ScenicTab.HOME
-                                viewModel.selectPin(null)
+                                navigateToTab(ScenicTab.HOME)
                             }
                         },
                         icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
@@ -360,7 +400,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         onClick = {
                             triggerHapticLight()
                             navigateWithWarning {
-                                activeTab = ScenicTab.MAP
+                                navigateToTab(ScenicTab.MAP)
                             }
                         },
                         icon = { Icon(Icons.Default.Map, contentDescription = "Map") },
@@ -372,7 +412,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         onClick = {
                             triggerHapticLight()
                             navigateWithWarning {
-                                activeTab = ScenicTab.SETTINGS
+                                navigateToTab(ScenicTab.SETTINGS)
                             }
                         },
                         icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
@@ -384,7 +424,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         onClick = {
                             triggerHapticLight()
                             navigateWithWarning {
-                                activeTab = ScenicTab.USER
+                                navigateToTab(ScenicTab.USER)
                             }
                         },
                         icon = { Icon(Icons.Default.AccountCircle, contentDescription = "User") },
@@ -508,10 +548,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                                     .clickable {
                                         triggerHapticLight()
                                         navigateWithWarning {
-                                            activeTab = tab
-                                            if (tab == ScenicTab.HOME) {
-                                                viewModel.selectPin(null)
-                                            }
+                                            navigateToTab(tab)
                                         }
                                     }
                                     .padding(horizontal = if (isSidebarExpanded) 16.dp else 12.dp, vertical = 12.dp),
@@ -562,8 +599,12 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         .fillMaxSize()
                         .weight(1f)
                 ) {
-            when (activeTab) {
-                ScenicTab.HOME -> {
+            androidx.navigation.compose.NavHost(
+                navController = navController,
+                startDestination = HomeRoute,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                composable<HomeRoute> {
                     if (isExpanded) {
                         Column(modifier = Modifier.fillMaxSize()) {
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -892,7 +933,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         }
                     }
                 }
-                ScenicTab.MAP -> {
+                composable<MapRoute> {
                     if (!isExpanded) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             InteractiveMapView(
@@ -900,7 +941,7 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                                 selectedPin = selectedPin,
                                 onPinSelected = { pin ->
                                     viewModel.selectPin(pin)
-                                    activeTab = ScenicTab.HOME
+                                    navigateToTab(ScenicTab.HOME)
                                 },
                                 onMapClicked = { lat, lng ->
                                     selectedLocationForAdd = Pair(lat, lng)
@@ -1149,14 +1190,14 @@ fun ScenicApp(viewModel: ScenicViewModel) {
                         }
                     }
                 }
-                ScenicTab.SETTINGS -> {
+                composable<SettingsRoute> {
                     SettingsScreen(
                         viewModel = viewModel,
                         foldPosture = foldPosture,
                         onFoldPostureChange = { foldPosture = it }
                     )
                 }
-                ScenicTab.USER -> {
+                composable<UserRoute> {
                     AccountScreen(viewModel = viewModel)
                 }
             }
@@ -4581,8 +4622,7 @@ fun SyncStatusIndicator(viewModel: ScenicViewModel) {
 @Composable
 fun FloatingWeatherWidget(viewModel: ScenicViewModel, useFahrenheit: Boolean) {
     val coroutineScope = rememberCoroutineScope()
-    var weatherTemp by remember { mutableStateOf<Double?>(null) }
-    var weatherDesc by remember { mutableStateOf<String?>(null) }
+    var weatherState by remember { mutableStateOf<com.example.domain.UiState<com.example.data.WeatherResponse>>(com.example.domain.UiState.Idle) }
     val context = LocalContext.current
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     val allPins by viewModel.allPins.collectAsStateWithLifecycle()
@@ -4590,11 +4630,14 @@ fun FloatingWeatherWidget(viewModel: ScenicViewModel, useFahrenheit: Boolean) {
     LaunchedEffect(allPins) {
         val triggerFetch: (Double, Double) -> Unit = { lat, lon ->
             coroutineScope.launch {
-                val result = viewModel.fetchCurrentWeather(lat, lon)
-                result.onSuccess { response ->
-                    weatherTemp = response.main.temp
-                    weatherDesc = response.weather.firstOrNull()?.description?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() } ?: "Clear"
-                }
+                weatherState = com.example.domain.UiState.Loading
+                viewModel.fetchCurrentWeather(lat, lon)
+                    .onSuccess { response ->
+                        weatherState = com.example.domain.UiState.Success(response)
+                    }
+                    .onFailure { error ->
+                        weatherState = com.example.domain.UiState.Error(error.localizedMessage ?: "Failed to fetch weather")
+                    }
             }
         }
         val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
@@ -4653,10 +4696,17 @@ fun FloatingWeatherWidget(viewModel: ScenicViewModel, useFahrenheit: Boolean) {
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
+                    val temp = if (weatherState is com.example.domain.UiState.Success) (weatherState as com.example.domain.UiState.Success<com.example.data.WeatherResponse>).data.main.temp else null
                     val displayTemp = if (useFahrenheit) {
-                        "${weatherTemp?.let { (it * 9 / 5 + 32).toInt() } ?: 77}°F"
+                        "${temp?.let { (it * 9 / 5 + 32).toInt() } ?: 77}°F"
                     } else {
-                        "${weatherTemp?.toInt() ?: 25}°C"
+                        "${temp?.toInt() ?: 25}°C"
+                    }
+                    val displayDesc = when (val state = weatherState) {
+                        is com.example.domain.UiState.Success -> state.data.weather.firstOrNull()?.description?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() } ?: "Clear"
+                        is com.example.domain.UiState.Loading -> "Loading weather..."
+                        is com.example.domain.UiState.Error -> "Weather unavailable"
+                        else -> "Weather unavailable"
                     }
                     Text(
                         text = displayTemp,
@@ -4664,7 +4714,7 @@ fun FloatingWeatherWidget(viewModel: ScenicViewModel, useFahrenheit: Boolean) {
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = weatherDesc ?: "Loading weather...",
+                        text = displayDesc,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -30,6 +30,11 @@ class ScenicRepositoryImpl(
         }
     }
 
+    private suspend fun triggerWidgetAndSyncUpdate() {
+        triggerWidgetUpdate()
+        com.example.background.FirebaseSyncManager.enqueueSync(context)
+    }
+
     override fun getAllPins(): Flow<List<ScenicPin>> {
         return pinDao.getAllPins().map { entities ->
             entities.map { it.toDomain() }
@@ -40,134 +45,107 @@ class ScenicRepositoryImpl(
         return pinDao.getPinById(id).map { it?.toDomain() }
     }
 
-    override suspend fun insertPin(pin: ScenicPin): Long = withContext(Dispatchers.IO) {
-        // Calculate celestial values offline before inserting!
-        val celestialResult = CelestialCalculator.calculate(pin.latitude, pin.longitude, pin.timestamp)
-        
-        // Fetch real-time weather at the time of save so it is accurate
-        var temperature = pin.temperature
-        var weatherStatus = pin.weatherStatus
-        var cloudCoverage = pin.cloudCoverage
-        var humidity = pin.humidity
-        var windSpeed = pin.windSpeed
-        var isWeatherSynced = pin.isWeatherSynced
-        
-        if (!isWeatherSynced) {
-            try {
-                val apiKey = com.example.BuildConfig.OPENWEATHER_API_KEY
-                if (apiKey.isNotEmpty()) {
-                    val response = weatherApi.getWeather(
-                        lat = pin.latitude,
-                        lon = pin.longitude,
-                        apiKey = apiKey
-                    )
-                    temperature = response.main.temp
-                    weatherStatus = response.weather.firstOrNull()?.main ?: "Clear"
-                    cloudCoverage = response.clouds.all
-                    humidity = response.main.humidity
-                    windSpeed = response.wind?.speed
-                    isWeatherSynced = true
-                    Log.d("ScenicRepository", "Successfully fetched weather on save for coordinates ${pin.latitude}, ${pin.longitude}")
-                } else {
-                    Log.e("ScenicRepository", "Weather API key is empty.")
-                }
-            } catch (e: Exception) {
-                Log.e("ScenicRepository", "Failed to fetch weather on save: ${e.localizedMessage}")
-            }
-        }
-
-        val enrichedPin = pin.copy(
-            sunAltitude = celestialResult.sunAltitude,
-            sunAzimuth = celestialResult.sunAzimuth,
-            moonAltitude = celestialResult.moonAltitude,
-            moonAzimuth = celestialResult.moonAzimuth,
-            moonPhase = celestialResult.moonPhase,
-            goldenHourStart = celestialResult.goldenHourStart,
-            goldenHourEnd = celestialResult.goldenHourEnd,
-            twilightStart = celestialResult.twilightStart,
-            twilightEnd = celestialResult.twilightEnd,
-            temperature = temperature,
-            weatherStatus = weatherStatus,
-            cloudCoverage = cloudCoverage,
-            humidity = humidity,
-            windSpeed = windSpeed,
-            isWeatherSynced = isWeatherSynced
-        )
-        val resultId = pinDao.insertPin(ScenicPinEntity.fromDomain(enrichedPin))
-        triggerWidgetUpdate()
-        resultId
-    }
-
-    override suspend fun insertPins(pins: List<ScenicPin>) = withContext(Dispatchers.IO) {
-        val enrichedPins = pins.map { pin ->
-            val celestialResult = CelestialCalculator.calculate(pin.latitude, pin.longitude, pin.timestamp)
-            pin.copy(
-                sunAltitude = celestialResult.sunAltitude,
-                sunAzimuth = celestialResult.sunAzimuth,
-                moonAltitude = celestialResult.moonAltitude,
-                moonAzimuth = celestialResult.moonAzimuth,
-                moonPhase = celestialResult.moonPhase,
-                goldenHourStart = celestialResult.goldenHourStart,
-                goldenHourEnd = celestialResult.goldenHourEnd,
-                twilightStart = celestialResult.twilightStart,
-                twilightEnd = celestialResult.twilightEnd
-            )
-        }
-        pinDao.insertPins(enrichedPins.map { ScenicPinEntity.fromDomain(it) })
-        triggerWidgetUpdate()
-    }
-
-    override suspend fun updatePin(pin: ScenicPin) = withContext(Dispatchers.IO) {
-        // Recalculate celestial parameters if location or timestamp changed
-        val celestialResult = CelestialCalculator.calculate(pin.latitude, pin.longitude, pin.timestamp)
-        val updatedPin = pin.copy(
-            sunAltitude = celestialResult.sunAltitude,
-            sunAzimuth = celestialResult.sunAzimuth,
-            moonAltitude = celestialResult.moonAltitude,
-            moonAzimuth = celestialResult.moonAzimuth,
-            moonPhase = celestialResult.moonPhase,
-            goldenHourStart = celestialResult.goldenHourStart,
-            goldenHourEnd = celestialResult.goldenHourEnd,
-            twilightStart = celestialResult.twilightStart,
-            twilightEnd = celestialResult.twilightEnd
-        )
-        pinDao.updatePin(ScenicPinEntity.fromDomain(updatedPin))
-        triggerWidgetUpdate()
-    }
-
-    override suspend fun deletePin(pin: ScenicPin) = withContext(Dispatchers.IO) {
-        pinDao.deletePin(ScenicPinEntity.fromDomain(pin))
-        triggerWidgetUpdate()
-    }
-
-    override suspend fun syncWeatherForPin(pinId: Long) = withContext(Dispatchers.IO) {
-        val localEntity = pinDao.getPinById(pinId).firstOrNull() ?: return@withContext
+    override suspend fun fetchWeather(lat: Double, lon: Double): Result<WeatherResponse> = withContext(Dispatchers.IO) {
+        val roundedLat = Math.round(lat * 100.0) / 100.0
+        val roundedLon = Math.round(lon * 100.0) / 100.0
+        val currentTime = System.currentTimeMillis()
+        val cacheExpiryTime = 15 * 60 * 1000 // 15 minutes in milliseconds
         
         try {
+            val cachedWeather = pinDao.getWeatherCache(roundedLat, roundedLon)
+            if (cachedWeather != null && (currentTime - cachedWeather.timestamp) < cacheExpiryTime) {
+                Log.d("ScenicRepository", "Weather Cache Hit for coordinates: $roundedLat, $roundedLon")
+                val weatherResponse = WeatherResponse(
+                    main = MainData(temp = cachedWeather.temperature, humidity = cachedWeather.humidity),
+                    weather = listOf(WeatherData(description = cachedWeather.weatherStatus, main = cachedWeather.weatherStatus)),
+                    clouds = CloudsData(all = cachedWeather.cloudCoverage),
+                    wind = cachedWeather.windSpeed?.let { WindData(speed = it) }
+                )
+                return@withContext Result.success(weatherResponse)
+            }
+            
+            // Periodically clean up old cache entries
+            pinDao.deleteOldWeatherCache(currentTime - cacheExpiryTime)
+            
             val apiKey = com.example.BuildConfig.OPENWEATHER_API_KEY
-            if (apiKey.isNotEmpty()) {
+            if (apiKey.isEmpty()) {
+                Result.failure(Exception("Weather API key is empty."))
+            } else {
                 val response = weatherApi.getWeather(
-                    lat = localEntity.latitude,
-                    lon = localEntity.longitude,
+                    lat = lat,
+                    lon = lon,
                     apiKey = apiKey
                 )
                 
-                val updatedEntity = localEntity.copy(
+                val cacheEntry = WeatherCacheEntity(
+                    latitude = roundedLat,
+                    longitude = roundedLon,
                     temperature = response.main.temp,
                     weatherStatus = response.weather.firstOrNull()?.main ?: "Clear",
                     cloudCoverage = response.clouds.all,
                     humidity = response.main.humidity,
                     windSpeed = response.wind?.speed,
-                    isWeatherSynced = true
+                    timestamp = currentTime
                 )
-                pinDao.updatePin(updatedEntity)
-                Log.d("ScenicRepository", "Successfully synced weather for pin $pinId")
-                triggerWidgetUpdate()
-            } else {
-                Log.e("ScenicRepository", "Weather API key is empty.")
+                pinDao.insertWeatherCache(cacheEntry)
+                Log.d("ScenicRepository", "Weather Cache Miss. Fetched from API and cached.")
+                Result.success(response)
             }
         } catch (e: Exception) {
-            Log.e("ScenicRepository", "Weather sync failed for pin $pinId: ${e.localizedMessage}")
+            Result.failure(e)
         }
     }
+
+    override suspend fun insertPin(pin: ScenicPin): Long = withContext(Dispatchers.IO) {
+        var enrichedPin = pin.enrichWithCelestialData()
+        
+        if (!enrichedPin.isWeatherSynced) {
+            fetchWeather(enrichedPin.latitude, enrichedPin.longitude)
+                .onSuccess { response ->
+                    enrichedPin = enrichedPin.enrichWithWeather(response)
+                    Log.d("ScenicRepository", "Successfully fetched weather on save for coordinates ${enrichedPin.latitude}, ${enrichedPin.longitude}")
+                }
+                .onFailure { e ->
+                    Log.e("ScenicRepository", "Failed to fetch weather on save: ${e.localizedMessage}")
+                }
+        }
+
+        val resultId = pinDao.insertPin(ScenicPinEntity.fromDomain(enrichedPin))
+        triggerWidgetAndSyncUpdate()
+        resultId
+    }
+
+    override suspend fun insertPins(pins: List<ScenicPin>) = withContext(Dispatchers.IO) {
+        val enrichedPins = pins.map { it.enrichWithCelestialData() }
+        pinDao.insertPins(enrichedPins.map { ScenicPinEntity.fromDomain(it) })
+        triggerWidgetAndSyncUpdate()
+    }
+
+    override suspend fun updatePin(pin: ScenicPin) = withContext(Dispatchers.IO) {
+        val updatedPin = pin.enrichWithCelestialData()
+        pinDao.updatePin(ScenicPinEntity.fromDomain(updatedPin))
+        triggerWidgetAndSyncUpdate()
+    }
+
+    override suspend fun deletePin(pin: ScenicPin) = withContext(Dispatchers.IO) {
+        pinDao.deletePin(ScenicPinEntity.fromDomain(pin))
+        triggerWidgetAndSyncUpdate()
+    }
+
+    override suspend fun syncWeatherForPin(pinId: Long) = withContext(Dispatchers.IO) {
+        val localEntity = pinDao.getPinById(pinId).firstOrNull() ?: return@withContext
+        val pin = localEntity.toDomain()
+        
+        fetchWeather(pin.latitude, pin.longitude)
+            .onSuccess { response ->
+                val updatedPin = pin.enrichWithWeather(response)
+                pinDao.updatePin(ScenicPinEntity.fromDomain(updatedPin))
+                Log.d("ScenicRepository", "Successfully synced weather for pin $pinId")
+                triggerWidgetAndSyncUpdate()
+            }
+            .onFailure { e ->
+                Log.e("ScenicRepository", "Weather sync failed for pin $pinId: ${e.localizedMessage}")
+            }
+    }
 }
+

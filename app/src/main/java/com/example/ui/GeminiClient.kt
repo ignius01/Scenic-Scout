@@ -19,6 +19,97 @@ object GeminiClient {
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * Executes a generative content request against the Gemini API.
+     * 
+     * Centralizes JSON assembly, request headers, error handling, and parsing of the response text content.
+     */
+    private suspend fun executeGeminiRequest(
+        prompt: String,
+        systemInstruction: String,
+        includeGoogleMaps: Boolean
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+            return@withContext Result.failure(Exception("API Key not configured. Please add your GEMINI_API_KEY to your Secrets panel or .env file."))
+        }
+
+        try {
+            val root = JSONObject()
+            
+            // Contents
+            val contentsArray = JSONArray()
+            val contentObj = JSONObject()
+            val partsArray = JSONArray()
+            val partObj = JSONObject()
+            partObj.put("text", prompt)
+            partsArray.put(partObj)
+            contentObj.put("parts", partsArray)
+            contentsArray.put(contentObj)
+            root.put("contents", contentsArray)
+
+            // Tools - googleMaps tool
+            if (includeGoogleMaps) {
+                val toolsArray = JSONArray()
+                val toolObj = JSONObject()
+                toolObj.put("googleMaps", JSONObject())
+                toolsArray.put(toolObj)
+                root.put("tools", toolsArray)
+            }
+
+            // System Instruction
+            val systemInstructionObj = JSONObject()
+            val systemPartsArray = JSONArray()
+            val systemPartObj = JSONObject()
+            systemPartObj.put("text", systemInstruction)
+            systemPartsArray.put(systemPartObj)
+            systemInstructionObj.put("parts", systemPartsArray)
+            root.put("systemInstruction", systemInstructionObj)
+
+            val requestBodyJson = root.toString()
+            val mediaType = "application/json; charset=utf-8".toMediaType()
+            val body = requestBodyJson.toRequestBody(mediaType)
+
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+            val request = Request.Builder()
+                .url(url)
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errBody = response.body?.string() ?: ""
+                    Log.e("GeminiClient", "API error: $errBody")
+                    return@withContext Result.failure(Exception("API error: ${response.code}"))
+                }
+
+                val responseBodyStr = response.body?.string() ?: return@withContext Result.failure(Exception("No response body"))
+                val responseJson = JSONObject(responseBodyStr)
+                val candidates = responseJson.optJSONArray("candidates")
+                if (candidates != null && candidates.length() > 0) {
+                    val candidate = candidates.getJSONObject(0)
+                    val content = candidate.optJSONObject("content")
+                    if (content != null) {
+                        val parts = content.optJSONArray("parts")
+                        if (parts != null && parts.length() > 0) {
+                            val text = parts.getJSONObject(0).optString("text", "")
+                            return@withContext Result.success(text.trim())
+                        }
+                    }
+                }
+                Result.failure(Exception("No content generated"))
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiClient", "Execution error", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Retrieves photography planning advice from Gemini AI.
+     * 
+     * Leverages the centralized request helper to avoid boilerplate setup.
+     */
     suspend fun getScenicAdvice(
         latitude: Double,
         longitude: Double,
@@ -28,10 +119,10 @@ object GeminiClient {
         iso: Int,
         aperture: String,
         notes: String
-    ): String = withContext(Dispatchers.IO) {
+    ): String {
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            return@withContext "API Key not configured. Please add your GEMINI_API_KEY to your Secrets panel or .env file."
+            return "API Key not configured. Please add your GEMINI_API_KEY to your Secrets panel or .env file."
         }
 
         val prompt = """
@@ -53,75 +144,19 @@ object GeminiClient {
             Keep your response incredibly professional, artistic, and concise. Avoid introductory conversational bloat.
         """.trimIndent()
 
-        // Construct request JSON using standard org.json
-        try {
-            val root = JSONObject()
-            
-            // Contents
-            val contentsArray = JSONArray()
-            val contentObj = JSONObject()
-            val partsArray = JSONArray()
-            val partObj = JSONObject()
-            partObj.put("text", prompt)
-            partsArray.put(partObj)
-            contentObj.put("parts", partsArray)
-            contentsArray.put(contentObj)
-            root.put("contents", contentsArray)
+        val systemInstruction = "You are Scenic AI Scout, a premium AI assistant for fine-art landscape photographers."
 
-            // Tools - googleMaps tool as requested
-            val toolsArray = JSONArray()
-            val toolObj = JSONObject()
-            toolObj.put("googleMaps", JSONObject())
-            toolsArray.put(toolObj)
-            root.put("tools", toolsArray)
-
-            // System Instruction
-            val systemInstructionObj = JSONObject()
-            val systemPartsArray = JSONArray()
-            val systemPartObj = JSONObject()
-            systemPartObj.put("text", "You are Scenic AI Scout, a premium AI assistant for fine-art landscape photographers.")
-            systemPartsArray.put(systemPartObj)
-            systemInstructionObj.put("parts", systemPartsArray)
-            root.put("systemInstruction", systemInstructionObj)
-
-            val requestBodyJson = root.toString()
-            val mediaType = "application/json; charset=utf-8".toMediaType()
-            val body = requestBodyJson.toRequestBody(mediaType)
-
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
-            val request = Request.Builder()
-                .url(url)
-                .post(body)
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errBody = response.body?.string() ?: ""
-                    Log.e("GeminiClient", "API error: $errBody")
-                    return@withContext "Error: Failed to fetch advice from Gemini AI. Response code: ${response.code}"
-                }
-
-                val responseBodyStr = response.body?.string() ?: return@withContext "No response from Gemini AI."
-                val responseJson = JSONObject(responseBodyStr)
-                val candidates = responseJson.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    val candidate = candidates.getJSONObject(0)
-                    val content = candidate.optJSONObject("content")
-                    if (content != null) {
-                        val parts = content.optJSONArray("parts")
-                        if (parts != null && parts.length() > 0) {
-                            return@withContext parts.getJSONObject(0).optString("text", "No text content found.")
-                        }
-                    }
-                }
-                return@withContext "No advice generated. Please try again."
-            }
-        } catch (e: Exception) {
-            Log.e("GeminiClient", "Execution error", e)
-            return@withContext "Failed to connect to Gemini AI: ${e.localizedMessage}"
-        }
+        return executeGeminiRequest(prompt, systemInstruction, includeGoogleMaps = true).fold(
+            onSuccess = { it.ifEmpty { "No text content found." } },
+            onFailure = { "Failed to connect to Gemini AI: ${it.localizedMessage}" }
+        )
     }
 
+    /**
+     * Suggests optimal camera settings for the current scout location.
+     * 
+     * Handles cleaning of JSON formatting outputs generated by the LLM.
+     */
     suspend fun getOptimalSettings(
         latitude: Double,
         longitude: Double,
@@ -134,10 +169,10 @@ object GeminiClient {
         isAnalog: Boolean,
         availableLenses: String,
         filmStocksList: String
-    ): String = withContext(Dispatchers.IO) {
+    ): String {
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
-            return@withContext "{\"error\": \"API Key not configured. Please add your GEMINI_API_KEY to your Secrets panel or .env file.\"}"
+            return "{\"error\": \"API Key not configured. Please add your GEMINI_API_KEY to your Secrets panel or .env file.\"}"
         }
 
         val prompt = """
@@ -162,72 +197,23 @@ object GeminiClient {
             }
         """.trimIndent()
 
-        try {
-            val root = JSONObject()
-            val contentsArray = JSONArray()
-            val contentObj = JSONObject()
-            val partsArray = JSONArray()
-            val partObj = JSONObject()
-            partObj.put("text", prompt)
-            partsArray.put(partObj)
-            contentObj.put("parts", partsArray)
-            contentsArray.put(contentObj)
-            root.put("contents", contentsArray)
+        val systemInstruction = "You are an expert camera settings assistant. Output only raw JSON and nothing else."
 
-            val systemInstructionObj = JSONObject()
-            val systemPartsArray = JSONArray()
-            val systemPartObj = JSONObject()
-            systemPartObj.put("text", "You are an expert camera settings assistant. Output only raw JSON and nothing else.")
-            systemPartsArray.put(systemPartObj)
-            systemInstructionObj.put("parts", systemPartsArray)
-            root.put("systemInstruction", systemInstructionObj)
-
-            val requestBodyJson = root.toString()
-            val mediaType = "application/json; charset=utf-8".toMediaType()
-            val body = requestBodyJson.toRequestBody(mediaType)
-
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
-            val request = Request.Builder()
-                .url(url)
-                .post(body)
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errBody = response.body?.string() ?: ""
-                    Log.e("GeminiClient", "API error: $errBody")
-                    return@withContext "{\"error\": \"API error: ${response.code}\"}"
+        return executeGeminiRequest(prompt, systemInstruction, includeGoogleMaps = false).fold(
+            onSuccess = { text ->
+                var cleaned = text
+                if (cleaned.startsWith("```json")) {
+                    cleaned = cleaned.removePrefix("```json")
                 }
-
-                val responseBodyStr = response.body?.string() ?: return@withContext "{\"error\": \"No response body\"}"
-                val responseJson = JSONObject(responseBodyStr)
-                val candidates = responseJson.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    val candidate = candidates.getJSONObject(0)
-                    val content = candidate.optJSONObject("content")
-                    if (content != null) {
-                        val parts = content.optJSONArray("parts")
-                        if (parts != null && parts.length() > 0) {
-                            var text = parts.getJSONObject(0).optString("text", "{}")
-                            // Clean markdown if models add it anyway
-                            if (text.startsWith("```json")) {
-                                text = text.removePrefix("```json")
-                            }
-                            if (text.startsWith("```")) {
-                                text = text.removePrefix("```")
-                            }
-                            if (text.endsWith("```")) {
-                                text = text.removeSuffix("```")
-                            }
-                            return@withContext text.trim()
-                        }
-                    }
+                if (cleaned.startsWith("```")) {
+                    cleaned = cleaned.removePrefix("```")
                 }
-                return@withContext "{\"error\": \"No candidates generated\"}"
-            }
-        } catch (e: Exception) {
-            Log.e("GeminiClient", "Execution error", e)
-            return@withContext "{\"error\": \"${e.localizedMessage}\"}"
-        }
+                if (cleaned.endsWith("```")) {
+                    cleaned = cleaned.removeSuffix("```")
+                }
+                cleaned.trim()
+            },
+            onFailure = { "{\"error\": \"${it.localizedMessage}\"}" }
+        )
     }
 }
