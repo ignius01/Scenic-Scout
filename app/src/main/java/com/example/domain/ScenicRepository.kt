@@ -1,6 +1,5 @@
 package com.example.domain
 
-import com.example.data.WeatherResponse
 import kotlinx.coroutines.flow.Flow
 
 interface ScenicRepository {
@@ -11,11 +10,4 @@ interface ScenicRepository {
     suspend fun updatePin(pin: ScenicPin)
     suspend fun deletePin(pin: ScenicPin)
     suspend fun syncWeatherForPin(pinId: Long)
-
-    /**
-     * Fetches current weather for given coordinates from the weather provider.
-     * 
-     * Centralized in repository to keep network credentials and retry strategies out of the ViewModel/UI layers.
-     */
-    suspend fun fetchWeather(lat: Double, lon: Double): Result<WeatherResponse>
 }

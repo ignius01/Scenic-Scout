@@ -7,8 +7,6 @@ plugins {
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
-  alias(libs.plugins.hilt)
-  alias(libs.plugins.kotlinx.serialization)
 }
 
 android {
@@ -140,12 +138,4 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
-  
-  // Hilt Dependency Injection
-  implementation(libs.hilt.android)
-  ksp(libs.hilt.android.compiler)
-  implementation(libs.androidx.hilt.navigation.compose)
-
-  // Kotlinx Serialization for Type-Safe Navigation
-  implementation(libs.kotlinx.serialization.json)
 }

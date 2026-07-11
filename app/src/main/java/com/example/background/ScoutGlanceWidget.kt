@@ -579,26 +579,13 @@ private fun getOnSurfaceColor(context: Context): Int {
     }
 }
 
-private var cachedSunsetTime: String? = null
-private var cachedSunsetPrimaryColor: Int? = null
-private var cachedSunsetOnSurfaceColor: Int? = null
-private var cachedSunsetBitmap: Bitmap? = null
-
 private fun createSunsetDialBitmap(context: Context, sunsetTime: String): Bitmap {
-    val primaryColor = getPrimaryColor(context)
-    val onSurfaceColor = getOnSurfaceColor(context)
-
-    if (sunsetTime == cachedSunsetTime &&
-        primaryColor == cachedSunsetPrimaryColor &&
-        onSurfaceColor == cachedSunsetOnSurfaceColor &&
-        cachedSunsetBitmap != null
-    ) {
-        return cachedSunsetBitmap!!
-    }
-
     val size = 300
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
+
+    val primaryColor = getPrimaryColor(context)
+    val onSurfaceColor = getOnSurfaceColor(context)
 
     val arcPaint = Paint().apply {
         isAntiAlias = true
@@ -651,40 +638,16 @@ private fun createSunsetDialBitmap(context: Context, sunsetTime: String): Bitmap
     }
     canvas.drawText("SUNSET", size / 2f, size / 2f + 80f, textPaint)
 
-    cachedSunsetTime = sunsetTime
-    cachedSunsetPrimaryColor = primaryColor
-    cachedSunsetOnSurfaceColor = onSurfaceColor
-    cachedSunsetBitmap = bitmap
-
     return bitmap
 }
 
-private var cachedOrbitLabel: String? = null
-private var cachedOrbitCountdown: String? = null
-private var cachedOrbitAlt: Double? = null
-private var cachedOrbitAz: Double? = null
-private var cachedOrbitPrimaryColor: Int? = null
-private var cachedOrbitOnSurfaceColor: Int? = null
-private var cachedOrbitBitmap: Bitmap? = null
-
 private fun createCelestialOrbitBitmap(context: Context, label: String, countdown: String, alt: Double, az: Double): Bitmap {
-    val primaryColor = getPrimaryColor(context)
-    val onSurfaceColor = getOnSurfaceColor(context)
-
-    if (label == cachedOrbitLabel &&
-        countdown == cachedOrbitCountdown &&
-        alt == cachedOrbitAlt &&
-        az == cachedOrbitAz &&
-        primaryColor == cachedOrbitPrimaryColor &&
-        onSurfaceColor == cachedOrbitOnSurfaceColor &&
-        cachedOrbitBitmap != null
-    ) {
-        return cachedOrbitBitmap!!
-    }
-
     val size = 360
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
+
+    val primaryColor = getPrimaryColor(context)
+    val onSurfaceColor = getOnSurfaceColor(context)
 
     val orbitPaint = Paint().apply {
         isAntiAlias = true
@@ -751,14 +714,6 @@ private fun createCelestialOrbitBitmap(context: Context, label: String, countdow
     }
     canvas.drawText("ALT: ${alt.toInt()}°", size / 4f + 10f, size - 24f, subPaint)
     canvas.drawText("AZ: ${az.toInt()}°", size * 3 / 4f - 10f, size - 24f, subPaint)
-
-    cachedOrbitLabel = label
-    cachedOrbitCountdown = countdown
-    cachedOrbitAlt = alt
-    cachedOrbitAz = az
-    cachedOrbitPrimaryColor = primaryColor
-    cachedOrbitOnSurfaceColor = onSurfaceColor
-    cachedOrbitBitmap = bitmap
 
     return bitmap
 }

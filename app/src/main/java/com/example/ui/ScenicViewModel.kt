@@ -18,14 +18,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.FlowPreview
 
-import dagger.hilt.android.lifecycle.HiltViewModel
-import javax.inject.Inject
-
-@HiltViewModel
-class ScenicViewModel @Inject constructor(
+class ScenicViewModel(
     private val repository: ScenicRepository,
     val settingsManager: com.example.data.SettingsManager,
-    val firebaseBackupManager: com.example.data.FirebaseBackupManager
+    val firebaseBackupManager: com.example.data.FirebaseBackupManager,
+    val weatherApi: com.example.data.WeatherApi
 ) : ViewModel() {
 
     private var isRestoringBackup = false
@@ -207,13 +204,35 @@ class ScenicViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Fetches current weather for the given coordinates by delegating to the repository.
-     * 
-     * Keeps the presentation layer decoupled from Direct API/Network clients.
-     */
-    suspend fun fetchCurrentWeather(latitude: Double, longitude: Double): Result<com.example.data.WeatherResponse> {
-        return repository.fetchWeather(latitude, longitude)
+    suspend fun fetchCurrentWeather(latitude: Double, longitude: Double): Result<com.example.data.WeatherResponse> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val apiKey = com.example.BuildConfig.OPENWEATHER_API_KEY
+            if (apiKey.isEmpty()) {
+                return@withContext Result.failure(Exception("Weather API key is empty"))
+            }
+            val response = weatherApi.getWeather(
+                lat = latitude,
+                lon = longitude,
+                apiKey = apiKey
+            )
+            Result.success(response)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
+    class Factory(
+        private val repository: ScenicRepository,
+        private val settingsManager: com.example.data.SettingsManager,
+        private val firebaseBackupManager: com.example.data.FirebaseBackupManager,
+        private val weatherApi: com.example.data.WeatherApi
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(ScenicViewModel::class.java)) {
+                return ScenicViewModel(repository, settingsManager, firebaseBackupManager, weatherApi) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class")
+        }
+    }
 }

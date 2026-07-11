@@ -15,12 +15,17 @@ import com.example.ui.ScenicApp
 import com.example.ui.ScenicViewModel
 import com.example.ui.theme.MyApplicationTheme
 
-import dagger.hilt.android.AndroidEntryPoint
-
-@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     
-    private val viewModel: ScenicViewModel by viewModels()
+    private val viewModel: ScenicViewModel by viewModels {
+        val appContainer = AppContainer(applicationContext)
+        ScenicViewModel.Factory(
+            appContainer.scenicRepository,
+            appContainer.settingsManager,
+            appContainer.firebaseBackupManager,
+            appContainer.weatherApi
+        )
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

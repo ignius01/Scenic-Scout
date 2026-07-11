@@ -27,13 +27,4 @@ interface ScenicPinDao {
 
     @Delete
     suspend fun deletePin(pin: ScenicPinEntity)
-
-    @Query("SELECT * FROM weather_cache WHERE latitude = :lat AND longitude = :lon LIMIT 1")
-    suspend fun getWeatherCache(lat: Double, lon: Double): WeatherCacheEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertWeatherCache(cache: WeatherCacheEntity)
-
-    @Query("DELETE FROM weather_cache WHERE timestamp < :threshold")
-    suspend fun deleteOldWeatherCache(threshold: Long)
 }

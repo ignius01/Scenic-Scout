@@ -92,7 +92,24 @@ class FirebaseBackupManager {
         val uid = userId ?: return Result.failure(IllegalStateException("User not logged in"))
         _isSyncing.value = true
         return try {
-            val pinsMap = pins.map { it.toMap() }
+            val pinsMap = pins.map { pin ->
+                mapOf(
+                    "name" to pin.name,
+                    "latitude" to pin.latitude,
+                    "longitude" to pin.longitude,
+                    "timestamp" to pin.timestamp,
+                    "landscapeType" to pin.landscapeType,
+                    "timeOfDayCategory" to pin.timeOfDayCategory,
+                    "filmStock" to pin.filmStock,
+                    "iso" to pin.iso,
+                    "aperture" to pin.aperture,
+                    "notes" to pin.notes,
+                    "temperature" to pin.temperature,
+                    "weatherStatus" to pin.weatherStatus,
+                    "cloudCoverage" to pin.cloudCoverage,
+                    "isWeatherSynced" to pin.isWeatherSynced
+                )
+            }
             firestore.collection("users").document(uid).set(mapOf("pins" to pinsMap)).await()
             Result.success(Unit)
         } catch (e: Exception) {
@@ -113,7 +130,37 @@ class FirebaseBackupManager {
                 val pinsList = document.get("pins") as? List<Map<String, Any?>> ?: emptyList()
                 for (pinMap in pinsList) {
                     if (pinMap.isEmpty()) continue
-                    val restoredPin = ScenicPin.fromMap(pinMap)
+                    val name = pinMap["name"] as? String ?: "Restored Pin"
+                    val lat = (pinMap["latitude"] as? Number)?.toDouble() ?: 0.0
+                    val lng = (pinMap["longitude"] as? Number)?.toDouble() ?: 0.0
+                    val timestamp = (pinMap["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                    val landscapeType = pinMap["landscapeType"] as? String ?: "Mountain"
+                    val timeOfDayCategory = pinMap["timeOfDayCategory"] as? String ?: "Day"
+                    val filmStock = pinMap["filmStock"] as? String ?: ""
+                    val iso = (pinMap["iso"] as? Number)?.toInt() ?: 100
+                    val aperture = pinMap["aperture"] as? String ?: "f/8"
+                    val notes = pinMap["notes"] as? String ?: ""
+                    val temperature = (pinMap["temperature"] as? Number)?.toDouble()
+                    val weatherStatus = pinMap["weatherStatus"] as? String
+                    val cloudCoverage = (pinMap["cloudCoverage"] as? Number)?.toInt()
+                    val isWeatherSynced = pinMap["isWeatherSynced"] as? Boolean ?: false
+
+                    val restoredPin = ScenicPin(
+                        name = name,
+                        latitude = lat,
+                        longitude = lng,
+                        timestamp = timestamp,
+                        landscapeType = landscapeType,
+                        timeOfDayCategory = timeOfDayCategory,
+                        filmStock = filmStock,
+                        iso = iso,
+                        aperture = aperture,
+                        notes = notes,
+                        temperature = temperature,
+                        weatherStatus = weatherStatus,
+                        cloudCoverage = cloudCoverage,
+                        isWeatherSynced = isWeatherSynced
+                    )
                     onRestore(restoredPin)
                     count++
                 }
